@@ -26,6 +26,7 @@ export class AIService {
     // OpenAI APIを初期化
     this.model = new OpenAI({
       modelName: "gpt-4o",
+      // modelName: "o3-mini",
       temperature: 0.2,
       openAIApiKey: process.env.OPENAI_API_KEY,
     });
@@ -85,12 +86,12 @@ export class AIService {
 
       回答は以下のJSON形式で返してください：
       [
-        {
+        {{
           "problem_point": "問題点の簡潔な説明",
           "suggestion": "具体的な改善提案",
-          "priority": "優先度(high/medium/low)",
-          "line_number": 行番号（わからない場合はnull）
-        },
+          "priority": "high/medium/lowのいずれか",
+          "line_number": 該当する行番号または null
+        }},
         ...
       ]
     `);
@@ -110,8 +111,13 @@ export class AIService {
     });
 
     try {
+      // 結果の不要な文字を削除
+      const cleanedResult = result
+        .replace(/```(json)?\s*/, "")
+        .replace(/```$/, "")
+        .trim();
       // 結果をパース
-      const feedbacks = JSON.parse(result);
+      const feedbacks = JSON.parse(cleanedResult);
       return feedbacks.map((feedback: any) => ({
         submission_id: submission.id,
         problem_point: feedback.problem_point,

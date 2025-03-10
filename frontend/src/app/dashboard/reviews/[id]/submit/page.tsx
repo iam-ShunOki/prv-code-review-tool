@@ -187,7 +187,8 @@ export default function SubmitRevisionPage({
             className="spinner-border animate-spin inline-block w-8 h-8 border-4 rounded-full"
             role="status"
           >
-            <span className="visually-hidden">読み込み中...</span>
+            {/* <span className="visually-hidden">読み込み中...</span> */}
+            <span className="visually-hidden"></span>
           </div>
           <p className="mt-2">情報を読み込み中...</p>
         </div>
