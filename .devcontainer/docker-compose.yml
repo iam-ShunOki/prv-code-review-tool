@@ -1,0 +1,56 @@
+version: "3.8"
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
+    volumes:
+      - ..:/workspace:cached
+      - ~/.ssh:/home/node/.ssh:ro
+    command: sleep infinity
+    network_mode: service:mysql
+    environment:
+      - MYSQL_HOST=localhost
+      - MYSQL_USER=codereviewer
+      - MYSQL_PASSWORD=reviewpassword
+      - MYSQL_DATABASE=codereview
+      - CHROMA_HOST=chroma
+      - NODE_ENV=development
+
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    volumes:
+      - mysql-data:/var/lib/mysql
+    environment:
+      - MYSQL_ROOT_PASSWORD=rootpassword
+      - MYSQL_DATABASE=codereview
+      - MYSQL_USER=codereviewer
+      - MYSQL_PASSWORD=reviewpassword
+    ports:
+      - 3306:3306
+
+  chroma:
+    image: ghcr.io/chroma-core/chroma:latest
+    restart: unless-stopped
+    volumes:
+      - chroma-data:/chroma/chroma
+    ports:
+      - 8000:8000
+
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin
+    restart: unless-stopped
+    environment:
+      - PMA_HOST=mysql
+      - PMA_PORT=3306
+      - MYSQL_ROOT_PASSWORD=rootpassword
+    ports:
+      - 8080:80
+    depends_on:
+      - mysql
+
+volumes:
+  mysql-data:
+  chroma-data:
