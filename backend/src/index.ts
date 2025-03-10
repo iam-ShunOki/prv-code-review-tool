@@ -43,11 +43,14 @@ async function startServer() {
 
 // APIルートのセットアップ
 import authRoutes from "./routes/authRoutes";
+import reviewRoutes from "./routes/reviewRoutes";
+import submissionRoutes from "./routes/submissionRoutes";
+import queueRoutes from "./routes/queueRoutes";
 app.use("/api/auth", authRoutes);
 // 他のルートは後で実装
-// app.use('/api/users', usersRoutes);
-// app.use('/api/reviews', reviewsRoutes);
-// app.use('/api/submissions', submissionsRoutes);
+app.use("/api/reviews", reviewRoutes);
+app.use("/api/submissions", submissionRoutes);
+app.use("/api/queue", queueRoutes);
 
 // エラーハンドリングミドルウェア
 app.use(

@@ -73,13 +73,13 @@ export default function DashboardPage() {
           <Card className="p-6">
             <h3 className="font-semibold flex items-center">
               <Code className="h-5 w-5 mr-2" />
-              新規コードレビュー
+              コードレビュー
             </h3>
             <p className="my-4 text-gray-500 text-sm">
               コードをアップロードして、AIによる詳細なレビューを受けられます。
             </p>
             <Button asChild className="w-full">
-              <Link href="/dashboard/reviews/new">レビュー依頼</Link>
+              <Link href="/dashboard/reviews">レビュー一覧</Link>
             </Button>
           </Card>
 
