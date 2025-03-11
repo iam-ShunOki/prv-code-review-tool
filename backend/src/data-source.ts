@@ -11,9 +11,9 @@ import { InitialSchema1625000000000 } from "./migrations/1625000000000-InitialSc
 import { AddSessionsTable1625000000100 } from "./migrations/1625000000100-AddSessionsTable";
 import { AddNotificationSettingsTable1625000000200 } from "./migrations/1625000000200-AddNotificationSettingsTable";
 import { CreateTestData1625000000300 } from "./migrations/1625000000300-CreateTestData";
+import { AddFeedbackStatusColumn1625000000400 } from "./migrations/1625000000400-AddFeedbackStatusColumn";
 import dotenv from "dotenv";
 import { NotificationSettings } from "./models/NotificationSettings";
-import { create } from "lodash";
 
 // 環境変数の読み込み
 dotenv.config();
@@ -42,6 +42,7 @@ export const AppDataSource = new DataSource({
     AddSessionsTable1625000000100,
     AddNotificationSettingsTable1625000000200,
     CreateTestData1625000000300,
+    AddFeedbackStatusColumn1625000000400,
   ],
   subscribers: [],
 });

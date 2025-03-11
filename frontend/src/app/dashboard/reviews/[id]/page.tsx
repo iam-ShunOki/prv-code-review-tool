@@ -25,6 +25,8 @@ import {
   ChevronDown,
   GitPullRequest,
 } from "lucide-react";
+import { FeedbackStatusButton } from "@/components/feedback/FeedbackStatusButton";
+import { FeedbackProgress } from "@/components/feedback/FeedbackProgress";
 
 // Monaco Editor をクライアントサイドのみでロード
 const MonacoEditor = dynamic(() => import("react-monaco-editor"), {
@@ -60,7 +62,14 @@ interface Feedback {
   suggestion: string;
   priority: "high" | "medium" | "low";
   line_number: number | null;
+  is_resolved: boolean;
   created_at: string;
+}
+
+interface ResolutionRate {
+  total: number;
+  resolved: number;
+  rate: number;
 }
 
 export default function ReviewDetailPage({
@@ -74,6 +83,9 @@ export default function ReviewDetailPage({
     null
   );
   const [refreshTrigger, setRefreshTrigger] = useState(0); // 自動更新のためのトリガー
+  const [feedbackStats, setFeedbackStats] = useState<
+    Map<number, ResolutionRate>
+  >(new Map());
   const { user, token } = useAuth();
   const { toast } = useToast();
   const router = useRouter();
@@ -126,6 +138,15 @@ export default function ReviewDetailPage({
             if (hasSubmittedSubmissions) {
               setTimeout(() => setRefreshTrigger((prev) => prev + 1), 5000);
             }
+
+            // 各提出のフィードバック統計情報を取得
+            await Promise.all(
+              submissionsData.data.map(async (submission: CodeSubmission) => {
+                if (submission.feedbacks && submission.feedbacks.length > 0) {
+                  await fetchFeedbackStats(submission.id);
+                }
+              })
+            );
           }
         }
       } catch (error) {
@@ -144,6 +165,59 @@ export default function ReviewDetailPage({
       fetchReviewDetail();
     }
   }, [params.id, token, toast, refreshTrigger]);
+
+  // フィードバック統計情報を取得
+  const fetchFeedbackStats = async (submissionId: number) => {
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/feedback/submission/${submissionId}`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        setFeedbackStats((prev) => {
+          const newStats = new Map(prev);
+          newStats.set(submissionId, data.data.resolutionRate);
+          return newStats;
+        });
+      }
+    } catch (error) {
+      console.error(
+        `フィードバック統計取得エラー (提出ID: ${submissionId}):`,
+        error
+      );
+    }
+  };
+
+  // フィードバックステータス変更時のハンドラー
+  const handleFeedbackStatusChange = async (
+    feedbackId: number,
+    newStatus: boolean
+  ) => {
+    if (!review) return;
+
+    // ローカルステートを更新
+    const updatedReview = { ...review };
+
+    // 該当するフィードバックを検索して更新
+    updatedReview.submissions.forEach((submission) => {
+      submission.feedbacks.forEach((feedback) => {
+        if (feedback.id === feedbackId) {
+          feedback.is_resolved = newStatus;
+        }
+      });
+
+      // 該当する提出のフィードバック統計を更新
+      fetchFeedbackStats(submission.id);
+    });
+
+    setReview(updatedReview);
+  };
 
   // ステータスに応じたバッジを返す関数
   const getStatusBadge = (status: Review["status"]) => {
@@ -211,7 +285,6 @@ export default function ReviewDetailPage({
             className="spinner-border animate-spin inline-block w-8 h-8 border-4 rounded-full"
             role="status"
           >
-            {/* <span className="visually-hidden">読み込み中...</span> */}
             <span className="visually-hidden"></span>
           </div>
           <p className="mt-2">レビュー詳細を読み込み中...</p>
@@ -363,9 +436,26 @@ export default function ReviewDetailPage({
                             )}
 
                             <div>
-                              <h4 className="text-sm font-medium mb-2">
-                                フィードバック
-                              </h4>
+                              <div className="flex justify-between items-center mb-3">
+                                <h4 className="text-sm font-medium">
+                                  フィードバック
+                                </h4>
+                                {submission.feedbacks &&
+                                  submission.feedbacks.length > 0 &&
+                                  feedbackStats.has(submission.id) && (
+                                    <FeedbackProgress
+                                      total={
+                                        feedbackStats.get(submission.id)
+                                          ?.total || 0
+                                      }
+                                      resolved={
+                                        feedbackStats.get(submission.id)
+                                          ?.resolved || 0
+                                      }
+                                    />
+                                  )}
+                              </div>
+
                               {submission.feedbacks &&
                               submission.feedbacks.length > 0 ? (
                                 <div className="space-y-3">
@@ -395,11 +485,20 @@ export default function ReviewDetailPage({
                                       <p className="text-sm mt-2">
                                         {feedback.suggestion}
                                       </p>
-                                      {feedback.line_number && (
-                                        <p className="text-xs text-gray-500 mt-1">
-                                          {feedback.line_number}行目
-                                        </p>
-                                      )}
+                                      <div className="flex justify-between items-center mt-3">
+                                        {feedback.line_number && (
+                                          <p className="text-xs text-gray-500">
+                                            {feedback.line_number}行目
+                                          </p>
+                                        )}
+                                        <FeedbackStatusButton
+                                          feedbackId={feedback.id}
+                                          initialStatus={feedback.is_resolved}
+                                          onStatusChange={
+                                            handleFeedbackStatusChange
+                                          }
+                                        />
+                                      </div>
                                     </Card>
                                   ))}
                                 </div>

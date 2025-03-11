@@ -51,8 +51,10 @@ import analyticsRoutes from "./routes/analyticsRoutes";
 import backlogRoutes from "./routes/backlogRoutes";
 import progressRoutes from "./routes/progressRoutes";
 import settingsRoutes from "./routes/settingsRoutes";
+import feedbackRoutes from "./routes/feedbackRoutes";
+
+// ルートの登録
 app.use("/api/auth", authRoutes);
-// 他のルートは後で実装
 app.use("/api/reviews", reviewRoutes);
 app.use("/api/submissions", submissionRoutes);
 app.use("/api/queue", queueRoutes);
@@ -61,8 +63,9 @@ app.use("/api/analytics", analyticsRoutes);
 app.use("/api/backlog", backlogRoutes);
 app.use("/api/progress", progressRoutes);
 app.use("/api/settings", settingsRoutes);
+app.use("/api/feedback", feedbackRoutes);
 
-// エラーハンドリングミドルウェア
+// エラーハンドリング強化
 app.use(
   (
     err: any,
@@ -71,7 +74,16 @@ app.use(
     next: express.NextFunction
   ) => {
     console.error(err.stack);
-    res.status(500).send("サーバーエラーが発生しました");
+
+    // エラー応答の構造化
+    const statusCode = err.statusCode || 500;
+    const message = err.message || "サーバーエラーが発生しました";
+
+    res.status(statusCode).json({
+      success: false,
+      message: message,
+      error: process.env.NODE_ENV === "development" ? err.stack : undefined,
+    });
   }
 );
 

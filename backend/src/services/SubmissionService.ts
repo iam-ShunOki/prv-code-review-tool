@@ -1,9 +1,11 @@
 // backend/src/services/SubmissionService.ts
 import { AppDataSource } from "../index";
 import { CodeSubmission, SubmissionStatus } from "../models/CodeSubmission";
+import { Review } from "../models/Review";
 
 export class SubmissionService {
   private submissionRepository = AppDataSource.getRepository(CodeSubmission);
+  private reviewRepository = AppDataSource.getRepository(Review);
 
   /**
    * 新規コード提出作成
@@ -51,6 +53,23 @@ export class SubmissionService {
     return this.submissionRepository.findOne({
       where: { id },
       relations: ["feedbacks", "evaluations"],
+    });
+  }
+
+  /**
+   * コード提出に関連するレビューを取得
+   */
+  async getReviewBySubmissionId(submissionId: number): Promise<Review | null> {
+    const submission = await this.submissionRepository.findOne({
+      where: { id: submissionId },
+    });
+
+    if (!submission) {
+      return null;
+    }
+
+    return this.reviewRepository.findOne({
+      where: { id: submission.review_id },
     });
   }
 

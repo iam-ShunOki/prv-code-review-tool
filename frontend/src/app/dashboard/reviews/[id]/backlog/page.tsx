@@ -13,13 +13,6 @@ import {
   CardFooter,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
@@ -36,6 +29,13 @@ import {
   GitMerge,
   GitCommit,
 } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 interface Review {
   id: number;
@@ -77,15 +77,29 @@ export default function BacklogIntegrationPage({
   const [selectedRepoId, setSelectedRepoId] = useState<string>("");
   const [baseBranch, setBaseBranch] = useState<string>("master");
   const [pullRequestUrl, setPullRequestUrl] = useState<string>("");
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const { toast } = useToast();
   const router = useRouter();
 
-  // レビュー情報を取得
+  // 管理者かどうかを判定
+  const isAdmin = user?.role === "admin";
+
   useEffect(() => {
     const fetchReviewData = async () => {
       try {
-        const response = await fetch(
+        // 管理者の場合はリダイレクト
+        if (isAdmin) {
+          toast({
+            title: "権限エラー",
+            description: "管理者はBacklogへの送信ができません",
+            variant: "destructive",
+          });
+          router.push(`/dashboard/reviews/${params.id}`);
+          return;
+        }
+
+        // レビュー情報を取得
+        const reviewResponse = await fetch(
           `${process.env.NEXT_PUBLIC_API_URL}/api/reviews/${params.id}`,
           {
             headers: {
@@ -94,27 +108,14 @@ export default function BacklogIntegrationPage({
           }
         );
 
-        if (!response.ok) {
+        if (!reviewResponse.ok) {
           throw new Error("レビュー情報の取得に失敗しました");
         }
 
-        const data = await response.json();
-        setReview(data.data);
-      } catch (error) {
-        console.error("レビュー情報取得エラー:", error);
-        toast({
-          title: "エラーが発生しました",
-          description: "レビュー情報の取得に失敗しました",
-          variant: "destructive",
-        });
-      } finally {
-        setIsLoading(false);
-      }
-    };
+        const reviewData = await reviewResponse.json();
+        setReview(reviewData.data);
 
-    // Backlog接続ステータスを確認
-    const checkBacklogStatus = async () => {
-      try {
+        // Backlog接続ステータスを確認
         const response = await fetch(
           `${process.env.NEXT_PUBLIC_API_URL}/api/backlog/status`,
           {
@@ -131,21 +132,22 @@ export default function BacklogIntegrationPage({
         const data = await response.json();
         setConnectionStatus(data.data);
       } catch (error) {
-        console.error("Backlog接続ステータス確認エラー:", error);
-        setConnectionStatus({
-          connected: false,
-          error: "接続確認中にエラーが発生しました",
+        console.error("データ取得エラー:", error);
+        toast({
+          title: "エラーが発生しました",
+          description: "レビュー情報の取得に失敗しました",
+          variant: "destructive",
         });
       } finally {
+        setIsLoading(false);
         setIsStatusLoading(false);
       }
     };
 
     if (token) {
       fetchReviewData();
-      checkBacklogStatus();
     }
-  }, [params.id, token, toast]);
+  }, [params.id, token, toast, router, isAdmin]);
 
   // プロジェクト一覧を取得
   const fetchProjects = async () => {

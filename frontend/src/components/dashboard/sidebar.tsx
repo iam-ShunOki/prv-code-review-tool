@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
@@ -21,6 +21,34 @@ export function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const [mobileOpen, setMobileOpen] = useState(false);
+
+  // ページ遷移時にモバイルメニューを閉じる
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [pathname]);
+
+  // 画面外クリックでモバイルメニューを閉じる
+  useEffect(() => {
+    const handleOutsideClick = (event: MouseEvent) => {
+      const sidebar = document.getElementById("sidebar");
+      const menuButton = document.getElementById("menu-button");
+
+      if (
+        mobileOpen &&
+        sidebar &&
+        menuButton &&
+        !sidebar.contains(event.target as Node) &&
+        !menuButton.contains(event.target as Node)
+      ) {
+        setMobileOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleOutsideClick);
+    return () => {
+      document.removeEventListener("mousedown", handleOutsideClick);
+    };
+  }, [mobileOpen]);
 
   const handleLogout = () => {
     logout();
@@ -51,15 +79,30 @@ export function Sidebar() {
       {/* モバイルトグルボタン */}
       <div className="md:hidden fixed top-0 left-0 p-4 z-20">
         <button
+          id="menu-button"
           onClick={toggleMobileMenu}
-          className="p-2 rounded-md text-gray-700 hover:bg-gray-200"
+          className="p-2 rounded-md text-gray-700 hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-primary"
+          aria-expanded={mobileOpen}
+          aria-controls="sidebar"
         >
           {mobileOpen ? <X size={24} /> : <Menu size={24} />}
+          <span className="sr-only">
+            {mobileOpen ? "メニューを閉じる" : "メニューを開く"}
+          </span>
         </button>
       </div>
 
+      {/* サイドバーオーバーレイ - モバイル表示時のみ */}
+      {mobileOpen && (
+        <div
+          className="md:hidden fixed inset-0 bg-gray-600 bg-opacity-50 z-10"
+          aria-hidden="true"
+        />
+      )}
+
       {/* サイドバー */}
       <div
+        id="sidebar"
         className={`
           ${mobileOpen ? "translate-x-0" : "-translate-x-full"} 
           md:translate-x-0
@@ -67,6 +110,7 @@ export function Sidebar() {
           fixed md:static z-10
           w-64 h-screen bg-white shadow-lg
         `}
+        aria-label="サイドバーナビゲーション"
       >
         <div className="flex flex-col h-full">
           {/* ヘッダー */}
@@ -79,7 +123,7 @@ export function Sidebar() {
           </div>
 
           {/* ナビゲーション */}
-          <nav className="flex-1 p-4 space-y-1">
+          <nav className="flex-1 p-4 space-y-1" aria-label="サイドバーメニュー">
             {navigation.map((item) => (
               <Link
                 key={item.name}
@@ -92,8 +136,9 @@ export function Sidebar() {
                       : "text-gray-700 hover:bg-gray-100"
                   }
                 `}
+                aria-current={pathname === item.href ? "page" : undefined}
               >
-                <item.icon className="mr-3 h-5 w-5" />
+                <item.icon className="mr-3 h-5 w-5" aria-hidden="true" />
                 {item.name}
               </Link>
             ))}
@@ -105,7 +150,7 @@ export function Sidebar() {
               onClick={handleLogout}
               className="flex items-center w-full px-4 py-2 text-sm font-medium text-red-700 rounded-md hover:bg-red-50"
             >
-              <LogOut className="mr-3 h-5 w-5" />
+              <LogOut className="mr-3 h-5 w-5" aria-hidden="true" />
               ログアウト
             </button>
           </div>

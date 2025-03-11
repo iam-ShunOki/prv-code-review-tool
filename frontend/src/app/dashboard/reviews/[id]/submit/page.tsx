@@ -9,14 +9,25 @@ import {
   Card,
   CardHeader,
   CardTitle,
+  CardDescription,
   CardContent,
   CardFooter,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { FeedbackList } from "@/components/feedback/feedback-list";
+import { FeedbackProgressTracker } from "@/components/feedback/feedback-progress-tracker";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/components/ui/use-toast";
-import { ArrowLeft, ChevronRight } from "lucide-react";
+import {
+  ArrowLeft,
+  ChevronRight,
+  Code,
+  FileText,
+  CheckCircle,
+  AlertCircle,
+} from "lucide-react";
 
 // Monaco Editor をクライアントサイドのみでロード
 const MonacoEditor = dynamic(() => import("react-monaco-editor"), {
@@ -35,7 +46,22 @@ interface CodeSubmission {
   code_content: string;
   expectation: string | null;
   version: number;
+  feedbacks: Feedback[];
 }
+
+interface Feedback {
+  id: number;
+  submission_id: number;
+  problem_point: string;
+  suggestion: string;
+  priority: "high" | "medium" | "low";
+  line_number: number | null;
+  created_at: string;
+}
+
+// ローカルストレージのキー
+const getResolvedFeedbacksKey = (reviewId: string) =>
+  `resolved_feedbacks_${reviewId}`;
 
 export default function SubmitRevisionPage({
   params,
@@ -45,13 +71,19 @@ export default function SubmitRevisionPage({
   const [review, setReview] = useState<Review | null>(null);
   const [latestSubmission, setLatestSubmission] =
     useState<CodeSubmission | null>(null);
+  const [feedbacks, setFeedbacks] = useState<Feedback[]>([]);
   const [code, setCode] = useState<string>("");
   const [expectation, setExpectation] = useState<string>("");
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const { token } = useAuth();
+  const [resolvedFeedbacks, setResolvedFeedbacks] = useState<number[]>([]);
+  const [activeTab, setActiveTab] = useState("code");
+  const { token, user } = useAuth();
   const { toast } = useToast();
   const router = useRouter();
+
+  // 管理者かどうかを判定
+  const isAdmin = user?.role === "admin";
 
   useEffect(() => {
     const fetchReviewAndSubmissions = async () => {
@@ -97,7 +129,20 @@ export default function SubmitRevisionPage({
             setLatestSubmission(latest);
             setCode(latest.code_content);
             setExpectation(latest.expectation || "");
+
+            // フィードバックを設定
+            if (latest.feedbacks && latest.feedbacks.length > 0) {
+              setFeedbacks(latest.feedbacks);
+            }
           }
+        }
+
+        // ローカルストレージから解決済みフィードバックのIDを取得
+        const storedResolvedFeedbacks = localStorage.getItem(
+          getResolvedFeedbacksKey(params.id)
+        );
+        if (storedResolvedFeedbacks) {
+          setResolvedFeedbacks(JSON.parse(storedResolvedFeedbacks));
         }
       } catch (error) {
         console.error("データ取得エラー:", error);
@@ -169,6 +214,29 @@ export default function SubmitRevisionPage({
     }
   };
 
+  // フィードバックの解決状態を切り替える
+  const handleMarkResolved = (feedbackId: number, resolved: boolean) => {
+    let updatedResolvedFeedbacks;
+
+    if (resolved) {
+      // 解決済みリストに追加
+      updatedResolvedFeedbacks = [...resolvedFeedbacks, feedbackId];
+    } else {
+      // 解決済みリストから削除
+      updatedResolvedFeedbacks = resolvedFeedbacks.filter(
+        (id) => id !== feedbackId
+      );
+    }
+
+    setResolvedFeedbacks(updatedResolvedFeedbacks);
+
+    // ローカルストレージに保存
+    localStorage.setItem(
+      getResolvedFeedbacksKey(params.id),
+      JSON.stringify(updatedResolvedFeedbacks)
+    );
+  };
+
   // Monaco Editor の設定
   const editorOptions = {
     selectOnLineNumbers: true,
@@ -179,6 +247,13 @@ export default function SubmitRevisionPage({
     minimap: { enabled: true },
   };
 
+  // 未対応フィードバックの数を取得
+  const getUnresolvedCount = () => {
+    return feedbacks.filter(
+      (feedback) => !resolvedFeedbacks.includes(feedback.id)
+    ).length;
+  };
+
   if (isLoading) {
     return (
       <div className="flex justify-center items-center h-64">
@@ -187,7 +262,6 @@ export default function SubmitRevisionPage({
             className="spinner-border animate-spin inline-block w-8 h-8 border-4 rounded-full"
             role="status"
           >
-            {/* <span className="visually-hidden">読み込み中...</span> */}
             <span className="visually-hidden"></span>
           </div>
           <p className="mt-2">情報を読み込み中...</p>
@@ -257,35 +331,95 @@ export default function SubmitRevisionPage({
       <Card>
         <CardHeader>
           <CardTitle>修正版コードの提出</CardTitle>
+          <CardDescription>
+            フィードバックを確認しながらコードを修正して再提出できます
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          <div>
-            <h3 className="text-sm font-medium mb-2">
-              コード（バージョン{" "}
-              {latestSubmission?.version ? latestSubmission.version + 1 : 1}）
-            </h3>
-            <div className="h-96 border rounded-md overflow-hidden">
-              <MonacoEditor
-                width="100%"
-                height="100%"
-                language="javascript" // デフォルト言語、言語選択機能を後で追加
-                theme="vs-dark"
-                value={code}
-                options={editorOptions}
-                onChange={setCode}
-              />
-            </div>
-          </div>
+          <Tabs value={activeTab} onValueChange={setActiveTab}>
+            <TabsList className="grid w-full md:w-[400px] grid-cols-2">
+              <TabsTrigger value="code" className="flex items-center">
+                <Code className="h-4 w-4 mr-2" />
+                コード編集
+              </TabsTrigger>
+              <TabsTrigger value="feedback" className="flex items-center">
+                <FileText className="h-4 w-4 mr-2" />
+                フィードバック
+                {feedbacks.length > 0 && (
+                  <span className="ml-2 bg-blue-100 text-blue-800 text-xs px-2 py-0.5 rounded-full">
+                    {getUnresolvedCount()}/{feedbacks.length}
+                  </span>
+                )}
+              </TabsTrigger>
+            </TabsList>
 
-          <div>
-            <h3 className="text-sm font-medium mb-2">期待する結果（任意）</h3>
-            <Textarea
-              value={expectation}
-              onChange={(e) => setExpectation(e.target.value)}
-              placeholder="コードに期待する動作や結果、修正した点など"
-              rows={4}
-            />
-          </div>
+            <TabsContent value="code" className="space-y-4 mt-4">
+              <div>
+                <h3 className="text-sm font-medium mb-2">
+                  コード（バージョン{" "}
+                  {latestSubmission?.version ? latestSubmission.version + 1 : 1}
+                  ）
+                </h3>
+                <div className="h-96 border rounded-md overflow-hidden">
+                  <MonacoEditor
+                    width="100%"
+                    height="100%"
+                    language="javascript" // デフォルト言語、言語選択機能を後で追加
+                    theme="vs-dark"
+                    value={code}
+                    options={editorOptions}
+                    onChange={setCode}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <h3 className="text-sm font-medium mb-2">
+                  期待する結果（任意）
+                </h3>
+                <Textarea
+                  value={expectation}
+                  onChange={(e) => setExpectation(e.target.value)}
+                  placeholder="コードに期待する動作や結果、修正した点など"
+                  rows={4}
+                />
+              </div>
+            </TabsContent>
+
+            <TabsContent value="feedback" className="space-y-4 mt-4">
+              <div className="space-y-4">
+                <h3 className="text-sm font-medium">前回のフィードバック</h3>
+
+                {feedbacks.length > 0 && (
+                  <FeedbackProgressTracker
+                    totalCount={feedbacks.length}
+                    resolvedCount={resolvedFeedbacks.length}
+                  />
+                )}
+
+                {feedbacks.length === 0 ? (
+                  <div className="bg-gray-50 p-6 rounded-md text-center">
+                    <p className="text-gray-500">フィードバックはありません</p>
+                  </div>
+                ) : (
+                  <div className="border rounded-md p-4 bg-gray-50">
+                    <FeedbackList
+                      feedbacks={feedbacks}
+                      onMarkResolved={handleMarkResolved}
+                      resolvedFeedbacks={resolvedFeedbacks}
+                      showResolved={true}
+                    />
+                  </div>
+                )}
+
+                <div className="mt-4 pt-4 border-t">
+                  <p className="text-sm text-gray-500">
+                    修正が完了したら「コード編集」タブに切り替えて、修正版を確認・提出してください。
+                  </p>
+                </div>
+              </div>
+            </TabsContent>
+          </Tabs>
         </CardContent>
         <CardFooter className="flex justify-between">
           <Button

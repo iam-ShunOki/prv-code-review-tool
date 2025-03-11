@@ -25,6 +25,7 @@ export class FeedbackService {
       suggestion: feedbackData.suggestion,
       priority: feedbackData.priority || FeedbackPriority.MEDIUM,
       line_number: feedbackData.line_number,
+      is_resolved: feedbackData.is_resolved || false,
     };
 
     // 直接リポジトリに渡して保存
@@ -51,5 +52,45 @@ export class FeedbackService {
     return this.feedbackRepository.findOne({
       where: { id },
     });
+  }
+
+  /**
+   * フィードバックの対応状態を更新
+   */
+  async updateFeedbackStatus(
+    id: number,
+    isResolved: boolean
+  ): Promise<Feedback | null> {
+    // フィードバックの存在確認
+    const feedback = await this.getFeedbackById(id);
+    if (!feedback) {
+      throw new Error("フィードバックが見つかりません");
+    }
+
+    // 対応状態を更新
+    await this.feedbackRepository.update(id, { is_resolved: isResolved });
+
+    // 更新されたフィードバックを返す
+    return this.getFeedbackById(id);
+  }
+
+  /**
+   * 特定の提出のフィードバック解決率を取得
+   */
+  async getResolutionRate(
+    submissionId: number
+  ): Promise<{ total: number; resolved: number; rate: number }> {
+    const feedbacks = await this.getFeedbacksBySubmissionId(submissionId);
+    const total = feedbacks.length;
+    const resolved = feedbacks.filter(
+      (feedback) => feedback.is_resolved
+    ).length;
+    const rate = total > 0 ? (resolved / total) * 100 : 0;
+
+    return {
+      total,
+      resolved,
+      rate: Math.round(rate),
+    };
   }
 }
