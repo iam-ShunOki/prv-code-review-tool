@@ -21,7 +21,7 @@ import {
   User,
   ChevronRight,
   Download,
-  BarChart,
+  BarChart as BarChartIcon,
   TrendingUp,
   AlertTriangle,
   CheckCircle,
@@ -32,17 +32,15 @@ import {
 import {
   LineChart,
   Line,
-  AreaChart,
-  Area,
-  BarChart,
+  BarChart, // Rechartsからのインポート
   Bar,
+  PieChart,
+  Pie,
   RadarChart,
   PolarGrid,
   PolarAngleAxis,
   PolarRadiusAxis,
   Radar,
-  PieChart,
-  Pie,
   Cell,
   XAxis,
   YAxis,
@@ -50,6 +48,8 @@ import {
   Tooltip,
   Legend,
   ResponsiveContainer,
+  AreaChart,
+  Area,
 } from "recharts";
 
 // 社員分析データの型定義
@@ -581,14 +581,13 @@ export default function EmployeeAnalyticsPage({
                   <YAxis
                     dataKey="priority"
                     type="category"
-                    tick={{
-                      formatter: (value) =>
-                        value === "high"
-                          ? "高優先度"
-                          : value === "medium"
-                          ? "中優先度"
-                          : "低優先度",
-                    }}
+                    tickFormatter={(value) =>
+                      value === "high"
+                        ? "高優先度"
+                        : value === "medium"
+                        ? "中優先度"
+                        : "低優先度"
+                    }
                   />
                   <Tooltip
                     formatter={(value) => [`${value}件`, "件数"]}
@@ -600,17 +599,7 @@ export default function EmployeeAnalyticsPage({
                         : "低優先度"
                     }
                   />
-                  <Bar
-                    dataKey="count"
-                    name="件数"
-                    fill={(entry) =>
-                      entry.priority === "high"
-                        ? "#f44336"
-                        : entry.priority === "medium"
-                        ? "#ff9800"
-                        : "#4caf50"
-                    }
-                  >
+                  <Bar dataKey="count" name="件数">
                     {analytics.feedbackStats.priorityDistribution.map(
                       (entry, index) => (
                         <Cell
@@ -696,9 +685,9 @@ export default function EmployeeAnalyticsPage({
                 <li className="flex items-start">
                   <AlertTriangle className="h-5 w-5 text-amber-500 mr-2 mt-0.5" />
                   <span>
-                    {analytics.feedbackStats.priorityDistribution.find(
+                    {(analytics.feedbackStats.priorityDistribution.find(
                       (p) => p.priority === "high"
-                    )?.count > 5
+                    )?.count ?? 0) > 5
                       ? "高優先度の問題に対する対応が必要。特にセキュリティとパフォーマンスに関する課題に注目すること"
                       : "フィードバックに基づく改善の継続と、新しい技術の学習が推奨される"}
                   </span>

@@ -741,6 +741,7 @@ export default function AnalyticsPage() {
               <div className="h-[400px]">
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart
+                    data={growthTrend}
                     margin={{
                       top: 20,
                       right: 30,
@@ -753,16 +754,11 @@ export default function AnalyticsPage() {
                       dataKey="month"
                       type="category"
                       allowDuplicatedCategory={false}
-                      data={growthTrend}
                     />
                     <YAxis domain={[0, 100]} />
                     <Tooltip />
                     <Legend />
                     <Line
-                      data={growthTrend.map((item, index) => ({
-                        month: item.month,
-                        value: Math.min(item.value + 5 - (index % 10), 100),
-                      }))}
                       type="monotone"
                       dataKey="value"
                       name="コード品質"
@@ -770,30 +766,18 @@ export default function AnalyticsPage() {
                       activeDot={{ r: 8 }}
                     />
                     <Line
-                      data={growthTrend.map((item, index) => ({
-                        month: item.month,
-                        value: Math.min(item.value - 8 + (index % 10), 100),
-                      }))}
                       type="monotone"
                       dataKey="value"
                       name="可読性"
                       stroke="#82ca9d"
                     />
                     <Line
-                      data={growthTrend.map((item, index) => ({
-                        month: item.month,
-                        value: Math.min(item.value - 15 + (index % 12), 100),
-                      }))}
                       type="monotone"
                       dataKey="value"
                       name="効率性"
                       stroke="#ffc658"
                     />
                     <Line
-                      data={growthTrend.map((item, index) => ({
-                        month: item.month,
-                        value: Math.min(item.value - 5 + (index % 8), 100),
-                      }))}
                       type="monotone"
                       dataKey="value"
                       name="ベストプラクティス"

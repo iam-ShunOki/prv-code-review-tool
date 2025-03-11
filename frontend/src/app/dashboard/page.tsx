@@ -70,44 +70,57 @@ export default function DashboardPage() {
       <section>
         <h2 className="text-xl font-bold mb-4">クイックアクセス</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          <Card className="p-6">
-            <h3 className="font-semibold flex items-center">
-              <Code className="h-5 w-5 mr-2" />
-              コードレビュー
-            </h3>
-            <p className="my-4 text-gray-500 text-sm">
-              コードをアップロードして、AIによる詳細なレビューを受けられます。
-            </p>
-            <Button asChild className="w-full">
-              <Link href="/dashboard/reviews">レビュー一覧</Link>
-            </Button>
+          {/* 各カードの高さを揃え、ボタンを下部に配置するためのレイアウト修正 */}
+          <Card className="p-6 flex flex-col h-full">
+            <div className="flex-1">
+              <h3 className="font-semibold flex items-center">
+                <Code className="h-5 w-5 mr-2" />
+                コードレビュー
+              </h3>
+              <p className="my-4 text-gray-500 text-sm">
+                コードをアップロードして、AIによる詳細なレビューを受けられます。
+              </p>
+            </div>
+            <div className="mt-auto pt-4">
+              <Button asChild className="w-full">
+                <Link href="/dashboard/reviews">レビュー一覧</Link>
+              </Button>
+            </div>
           </Card>
 
-          <Card className="p-6">
-            <h3 className="font-semibold flex items-center">
-              <TrendingUp className="h-5 w-5 mr-2" />
-              進捗状況の確認
-            </h3>
-            <p className="my-4 text-gray-500 text-sm">
-              これまでのレビュー履歴や成長推移を確認できます。スキルレベルと改善ポイントも確認できます。
-            </p>
-            <Button asChild variant="outline" className="w-full">
-              <Link href="/dashboard/progress">確認する</Link>
-            </Button>
+          <Card className="p-6 flex flex-col h-full">
+            <div className="flex-1">
+              <h3 className="font-semibold flex items-center">
+                <TrendingUp className="h-5 w-5 mr-2" />
+                進捗状況の確認
+              </h3>
+              <p className="my-4 text-gray-500 text-sm">
+                これまでのレビュー履歴や成長推移を確認できます。スキルレベルと改善ポイントも確認できます。
+              </p>
+            </div>
+            <div className="mt-auto pt-4">
+              <Button asChild variant="outline" className="w-full">
+                <Link href="/dashboard/progress">確認する</Link>
+              </Button>
+            </div>
           </Card>
 
           {isAdmin && (
-            <Card className="p-6">
-              <h3 className="font-semibold flex items-center">
-                <BarChart className="h-5 w-5 mr-2" />
-                分析レポート
-              </h3>
-              <p className="my-4 text-gray-500 text-sm">
-                新入社員のスキル分布や成長推移を確認できます。
-              </p>
-              <Button asChild variant="outline" className="w-full">
-                <Link href="/dashboard/analytics">分析する</Link>
-              </Button>
+            <Card className="p-6 flex flex-col h-full">
+              <div className="flex-1">
+                <h3 className="font-semibold flex items-center">
+                  <BarChart className="h-5 w-5 mr-2" />
+                  分析レポート
+                </h3>
+                <p className="my-4 text-gray-500 text-sm">
+                  新入社員のスキル分布や成長推移を確認できます。
+                </p>
+              </div>
+              <div className="mt-auto pt-4">
+                <Button asChild variant="outline" className="w-full">
+                  <Link href="/dashboard/analytics">分析する</Link>
+                </Button>
+              </div>
             </Card>
           )}
         </div>

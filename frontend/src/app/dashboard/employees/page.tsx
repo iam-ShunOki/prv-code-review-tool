@@ -22,6 +22,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+  PaginationEllipsis,
+} from "@/components/ui/pagination";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/components/ui/use-toast";
 import { Search, Users, FilterX } from "lucide-react";
@@ -46,6 +55,9 @@ export default function EmployeesPage() {
   const [departments, setDepartments] = useState<string[]>([]);
   const [selectedYear, setSelectedYear] = useState<string>("");
   const [selectedDepartment, setSelectedDepartment] = useState<string>("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const itemsPerPage = 10; // 1ページあたりの表示数
   const { token } = useAuth();
   const { toast } = useToast();
   const router = useRouter();
@@ -84,6 +96,9 @@ export default function EmployeesPage() {
         const data = await response.json();
         setEmployees(data.data);
         setFilteredEmployees(data.data);
+
+        // 検索条件が変わった場合、ページを1に戻す
+        setCurrentPage(1);
       } catch (error) {
         console.error("社員一覧取得エラー:", error);
         toast({
@@ -161,13 +176,26 @@ export default function EmployeesPage() {
       );
       setFilteredEmployees(filtered);
     }
+
+    // 検索条件が変わった場合、ページを1に戻す
+    setCurrentPage(1);
+
+    // 総ページ数を計算
+    const filtered = searchQuery.trim() === "" ? employees : filteredEmployees;
+    setTotalPages(Math.ceil(filtered.length / itemsPerPage));
   }, [searchQuery, employees]);
+
+  // フィルタされた社員リストが変わったら総ページ数を再計算
+  useEffect(() => {
+    setTotalPages(Math.ceil(filteredEmployees.length / itemsPerPage));
+  }, [filteredEmployees]);
 
   // フィルタをリセット
   const resetFilters = () => {
     setSelectedYear("");
     setSelectedDepartment("");
     setSearchQuery("");
+    setCurrentPage(1);
   };
 
   // 日付をフォーマット
@@ -178,6 +206,84 @@ export default function EmployeesPage() {
       month: "numeric",
       day: "numeric",
     });
+  };
+
+  // 現在のページのデータを取得
+  const getCurrentPageData = () => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    const endIndex = startIndex + itemsPerPage;
+    return filteredEmployees.slice(startIndex, endIndex);
+  };
+
+  // ページネーションリンクを生成する関数
+  const renderPaginationLinks = () => {
+    const pageItems = [];
+    const maxDisplayedPages = 5; // 最大表示ページ数
+
+    // 最初のページへのリンク（常に表示）
+    pageItems.push(
+      <PaginationItem key="first">
+        <PaginationLink
+          isActive={currentPage === 1}
+          onClick={() => setCurrentPage(1)}
+        >
+          1
+        </PaginationLink>
+      </PaginationItem>
+    );
+
+    // 左の省略記号（必要な場合）
+    if (currentPage > 3) {
+      pageItems.push(
+        <PaginationItem key="ellipsis-left">
+          <PaginationEllipsis />
+        </PaginationItem>
+      );
+    }
+
+    // 中間のページリンク
+    for (
+      let i = Math.max(2, currentPage - 1);
+      i <= Math.min(totalPages - 1, currentPage + 1);
+      i++
+    ) {
+      if (i === 1 || i === totalPages) continue; // 最初と最後のページは別に処理
+      pageItems.push(
+        <PaginationItem key={i}>
+          <PaginationLink
+            isActive={currentPage === i}
+            onClick={() => setCurrentPage(i)}
+          >
+            {i}
+          </PaginationLink>
+        </PaginationItem>
+      );
+    }
+
+    // 右の省略記号（必要な場合）
+    if (currentPage < totalPages - 2) {
+      pageItems.push(
+        <PaginationItem key="ellipsis-right">
+          <PaginationEllipsis />
+        </PaginationItem>
+      );
+    }
+
+    // 最後のページへのリンク（常に表示、ただし最初のページと同じ場合は非表示）
+    if (totalPages > 1) {
+      pageItems.push(
+        <PaginationItem key="last">
+          <PaginationLink
+            isActive={currentPage === totalPages}
+            onClick={() => setCurrentPage(totalPages)}
+          >
+            {totalPages}
+          </PaginationLink>
+        </PaginationItem>
+      );
+    }
+
+    return pageItems;
   };
 
   if (isLoading) {
@@ -292,60 +398,92 @@ export default function EmployeesPage() {
               </div>
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>社員ID</TableHead>
-                    <TableHead>氏名</TableHead>
-                    <TableHead>メールアドレス</TableHead>
-                    <TableHead>入社年度</TableHead>
-                    <TableHead>部署</TableHead>
-                    <TableHead>権限</TableHead>
-                    <TableHead>登録日</TableHead>
-                    <TableHead className="text-right">操作</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredEmployees.map((employee) => (
-                    <TableRow key={employee.id}>
-                      <TableCell>{employee.id}</TableCell>
-                      <TableCell className="font-medium">
-                        {employee.name}
-                      </TableCell>
-                      <TableCell>{employee.email}</TableCell>
-                      <TableCell>
-                        {employee.join_year ? `${employee.join_year}年度` : "-"}
-                      </TableCell>
-                      <TableCell>{employee.department || "-"}</TableCell>
-                      <TableCell>
-                        <span
-                          className={`px-2 py-1 rounded text-xs ${
-                            employee.role === "admin"
-                              ? "bg-purple-100 text-purple-800"
-                              : "bg-blue-100 text-blue-800"
-                          }`}
-                        >
-                          {employee.role === "admin" ? "管理者" : "新入社員"}
-                        </span>
-                      </TableCell>
-                      <TableCell>{formatDate(employee.created_at)}</TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() =>
-                            router.push(`/dashboard/employees/${employee.id}`)
-                          }
-                        >
-                          詳細
-                        </Button>
-                      </TableCell>
+            <>
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>社員ID</TableHead>
+                      <TableHead>氏名</TableHead>
+                      <TableHead>メールアドレス</TableHead>
+                      <TableHead>入社年度</TableHead>
+                      <TableHead>部署</TableHead>
+                      <TableHead>権限</TableHead>
+                      <TableHead>登録日</TableHead>
+                      <TableHead className="text-right">操作</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+                  </TableHeader>
+                  <TableBody>
+                    {getCurrentPageData().map((employee) => (
+                      <TableRow key={employee.id}>
+                        <TableCell>{employee.id}</TableCell>
+                        <TableCell className="font-medium">
+                          {employee.name}
+                        </TableCell>
+                        <TableCell>{employee.email}</TableCell>
+                        <TableCell>
+                          {employee.join_year
+                            ? `${employee.join_year}年度`
+                            : "-"}
+                        </TableCell>
+                        <TableCell>{employee.department || "-"}</TableCell>
+                        <TableCell>
+                          <span
+                            className={`px-2 py-1 rounded text-xs ${
+                              employee.role === "admin"
+                                ? "bg-purple-100 text-purple-800"
+                                : "bg-blue-100 text-blue-800"
+                            }`}
+                          >
+                            {employee.role === "admin" ? "管理者" : "新入社員"}
+                          </span>
+                        </TableCell>
+                        <TableCell>{formatDate(employee.created_at)}</TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() =>
+                              router.push(`/dashboard/employees/${employee.id}`)
+                            }
+                          >
+                            詳細
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+
+              {/* ページネーション */}
+              {totalPages > 1 && (
+                <Pagination className="my-4">
+                  <PaginationContent>
+                    {/* 前のページへのリンク */}
+                    {currentPage > 1 && (
+                      <PaginationItem>
+                        <PaginationPrevious
+                          onClick={() => setCurrentPage(currentPage - 1)}
+                        />
+                      </PaginationItem>
+                    )}
+
+                    {/* ページ番号リンク */}
+                    {renderPaginationLinks()}
+
+                    {/* 次のページへのリンク */}
+                    {currentPage < totalPages && (
+                      <PaginationItem>
+                        <PaginationNext
+                          onClick={() => setCurrentPage(currentPage + 1)}
+                        />
+                      </PaginationItem>
+                    )}
+                  </PaginationContent>
+                </Pagination>
+              )}
+            </>
           )}
         </CardContent>
       </Card>
