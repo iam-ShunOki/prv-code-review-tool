@@ -4,7 +4,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
-import { Code, ListChecks, BarChart, Clock } from "lucide-react";
+import { Code, ListChecks, BarChart, Clock, TrendingUp } from "lucide-react";
 
 export default function DashboardPage() {
   const { user } = useAuth();
@@ -85,11 +85,11 @@ export default function DashboardPage() {
 
           <Card className="p-6">
             <h3 className="font-semibold flex items-center">
-              <ListChecks className="h-5 w-5 mr-2" />
+              <TrendingUp className="h-5 w-5 mr-2" />
               進捗状況の確認
             </h3>
             <p className="my-4 text-gray-500 text-sm">
-              これまでのレビュー履歴や成長推移を確認できます。
+              これまでのレビュー履歴や成長推移を確認できます。スキルレベルと改善ポイントも確認できます。
             </p>
             <Button asChild variant="outline" className="w-full">
               <Link href="/dashboard/progress">確認する</Link>

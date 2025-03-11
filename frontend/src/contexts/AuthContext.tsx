@@ -28,6 +28,7 @@ type AuthContextType = {
     join_year?: number;
   }) => Promise<void>;
   logout: () => void;
+  updateUser: (userData: User) => void; // 追加
 };
 
 // コンテキストの作成
@@ -175,9 +176,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem("sessionToken");
   };
 
+  const updateUser = (userData: User) => {
+    setUser(userData);
+  };
+
   return (
     <AuthContext.Provider
-      value={{ user, token, isLoading, login, register, logout }}
+      value={{ user, token, isLoading, login, register, logout, updateUser }}
     >
       {children}
     </AuthContext.Provider>

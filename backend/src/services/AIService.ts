@@ -81,10 +81,18 @@ export class AIService {
 
       {expectation}
 
-      以下の形式で、3〜5個の重要な問題点と改善提案を提供してください。
-      問題点ごとに、問題の説明、具体的な改善提案、優先度（high/medium/low）、該当する行番号（わかる場合）を含めてください。
+      コードを次の観点で評価してください：
+      1. コードの品質
+      2. 可読性
+      3. 効率性
+      4. ベストプラクティスへの準拠
 
-      回答は以下のJSON形式で返してください：
+      結果は以下の形式で返してください：
+      - コードに問題がある場合：3〜5個の問題点と改善提案を含むJSON配列
+      - コードが十分に優れている場合：空の配列（[]）
+
+      各問題点のJSONフォーマット:
+      \`\`\`json
       [
         {{
           "problem_point": "問題点の簡潔な説明",
@@ -94,6 +102,9 @@ export class AIService {
         }},
         ...
       ]
+      \`\`\`
+
+      注意: コードに重大な問題がない場合は、空の配列を返してください。
     `);
 
     // 期待値がある場合は追加情報としてプロンプトに含める
@@ -116,8 +127,25 @@ export class AIService {
         .replace(/```(json)?\s*/, "")
         .replace(/```$/, "")
         .trim();
+
       // 結果をパース
       const feedbacks = JSON.parse(cleanedResult);
+
+      // フィードバックがない（空の配列）の場合は、良好なコードのフィードバックを返す
+      if (feedbacks.length === 0) {
+        return [
+          {
+            submission_id: submission.id,
+            problem_point: "優れたコード",
+            suggestion:
+              "コードは全体的に良好で、重大な改善点は見つかりませんでした。素晴らしい仕事です！",
+            priority: FeedbackPriority.LOW,
+            line_number: undefined,
+          },
+        ];
+      }
+
+      // フィードバックをマッピング
       return feedbacks.map((feedback: any) => ({
         submission_id: submission.id,
         problem_point: feedback.problem_point,

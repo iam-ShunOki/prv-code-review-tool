@@ -109,4 +109,63 @@ export class UserService {
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     await this.userRepository.update(id, { password: hashedPassword });
   }
+  /**
+   * フィルター条件を指定して社員を取得する
+   */
+  async getFilteredEmployees(
+    joinYear?: number,
+    department?: string
+  ): Promise<User[]> {
+    const whereConditions: any = {};
+
+    if (joinYear) {
+      whereConditions.join_year = joinYear;
+    }
+
+    if (department) {
+      whereConditions.department = department;
+    }
+
+    const users = await this.userRepository.find({
+      where: whereConditions,
+      order: {
+        join_year: "DESC",
+        name: "ASC",
+      },
+    });
+
+    // パスワードを除外してから返す
+    return users.map((user) => {
+      const { password, ...userWithoutPassword } = user;
+      return userWithoutPassword as User;
+    });
+  }
+
+  /**
+   * 入社年度の一覧を取得
+   */
+  async getDistinctJoinYears(): Promise<number[]> {
+    const result = await this.userRepository
+      .createQueryBuilder("user")
+      .select("DISTINCT user.join_year", "join_year")
+      .where("user.join_year IS NOT NULL")
+      .orderBy("user.join_year", "DESC")
+      .getRawMany();
+
+    return result.map((item) => item.join_year);
+  }
+
+  /**
+   * 部署の一覧を取得
+   */
+  async getDistinctDepartments(): Promise<string[]> {
+    const result = await this.userRepository
+      .createQueryBuilder("user")
+      .select("DISTINCT user.department", "department")
+      .where("user.department IS NOT NULL")
+      .orderBy("user.department", "ASC")
+      .getRawMany();
+
+    return result.map((item) => item.department);
+  }
 }

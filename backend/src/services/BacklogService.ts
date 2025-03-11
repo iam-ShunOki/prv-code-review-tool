@@ -1,0 +1,302 @@
+// backend/src/services/BacklogService.ts
+import axios from "axios";
+import * as fs from "fs";
+import * as path from "path";
+import { exec } from "child_process";
+import { promisify } from "util";
+import { AppDataSource } from "../index";
+import { User } from "../models/User";
+import { Review } from "../models/Review";
+import { CodeSubmission } from "../models/CodeSubmission";
+
+const execPromise = promisify(exec);
+const mkdirPromise = promisify(fs.mkdir);
+const writeFilePromise = promisify(fs.writeFile);
+const rmdirPromise = promisify(fs.rmdir);
+
+export class BacklogService {
+  private baseUrl: string;
+  private apiKey: string;
+  private spaceKey: string;
+  private tempDir: string;
+
+  constructor() {
+    this.apiKey = process.env.BACKLOG_API_KEY || "";
+    this.spaceKey = process.env.BACKLOG_SPACE || "";
+    this.baseUrl = `https://${this.spaceKey}.backlog.jp/api/v2`;
+    this.tempDir = path.join(__dirname, "../../temp");
+  }
+
+  /**
+   * プロジェクトの一覧を取得
+   */
+  async getProjects(): Promise<any[]> {
+    try {
+      const response = await axios.get(`${this.baseUrl}/projects`, {
+        params: {
+          apiKey: this.apiKey,
+        },
+      });
+      return response.data;
+    } catch (error) {
+      console.error("Backlog API - プロジェクト一覧取得エラー:", error);
+      throw new Error("プロジェクト一覧の取得に失敗しました");
+    }
+  }
+
+  /**
+   * リポジトリの一覧を取得
+   */
+  async getRepositories(projectIdOrKey: string): Promise<any[]> {
+    try {
+      const response = await axios.get(
+        `${this.baseUrl}/projects/${projectIdOrKey}/git/repositories`,
+        {
+          params: {
+            apiKey: this.apiKey,
+          },
+        }
+      );
+      return response.data;
+    } catch (error) {
+      console.error("Backlog API - リポジトリ一覧取得エラー:", error);
+      throw new Error("リポジトリ一覧の取得に失敗しました");
+    }
+  }
+
+  /**
+   * リポジトリをクローン
+   */
+  async cloneRepository(
+    projectIdOrKey: string,
+    repoIdOrName: string,
+    branch: string = "master"
+  ): Promise<string> {
+    const tempRepoDir = path.join(
+      this.tempDir,
+      `${projectIdOrKey}_${repoIdOrName}_${Date.now()}`
+    );
+
+    try {
+      // 一時ディレクトリが存在しない場合は作成
+      if (!fs.existsSync(this.tempDir)) {
+        await mkdirPromise(this.tempDir, { recursive: true });
+      }
+
+      // リポジトリをクローン
+      const gitUrl = `https://${this.spaceKey}.backlog.jp/git/${projectIdOrKey}/${repoIdOrName}.git`;
+      const command = `git clone -b ${branch} ${gitUrl} ${tempRepoDir}`;
+
+      await execPromise(command);
+
+      return tempRepoDir;
+    } catch (error) {
+      console.error("リポジトリクローンエラー:", error);
+
+      // エラー発生時は一時ディレクトリを削除
+      if (fs.existsSync(tempRepoDir)) {
+        try {
+          await rmdirPromise(tempRepoDir, { recursive: true });
+        } catch (rmError) {
+          console.error("一時ディレクトリ削除エラー:", rmError);
+        }
+      }
+
+      throw new Error("リポジトリのクローンに失敗しました");
+    }
+  }
+
+  /**
+   * プルリクエストを作成
+   */
+  async createPullRequest(
+    projectIdOrKey: string,
+    repoIdOrName: string,
+    params: {
+      title: string;
+      description: string;
+      base: string;
+      branch: string;
+    }
+  ): Promise<any> {
+    try {
+      const response = await axios.post(
+        `${this.baseUrl}/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/pullRequests`,
+        {
+          summary: params.title,
+          description: params.description,
+          base: params.base,
+          branch: params.branch,
+        },
+        {
+          params: {
+            apiKey: this.apiKey,
+          },
+        }
+      );
+      return response.data;
+    } catch (error) {
+      console.error("Backlog API - プルリクエスト作成エラー:", error);
+      throw new Error("プルリクエストの作成に失敗しました");
+    }
+  }
+
+  /**
+   * ブランチを作成して変更をプッシュ
+   */
+  async createBranchAndPush(
+    repoPath: string,
+    branchName: string,
+    files: { path: string; content: string }[],
+    commitMessage: string
+  ): Promise<void> {
+    try {
+      // 新しいブランチを作成
+      await execPromise(`cd ${repoPath} && git checkout -b ${branchName}`);
+
+      // ファイルを書き込み
+      for (const file of files) {
+        const filePath = path.join(repoPath, file.path);
+        const dirPath = path.dirname(filePath);
+
+        // 必要なディレクトリを作成
+        if (!fs.existsSync(dirPath)) {
+          await mkdirPromise(dirPath, { recursive: true });
+        }
+
+        // ファイルを書き込み
+        await writeFilePromise(filePath, file.content);
+      }
+
+      // 変更をステージングしてコミット
+      await execPromise(
+        `cd ${repoPath} && git add -A && git commit -m "${commitMessage}"`
+      );
+
+      // 変更をプッシュ
+      await execPromise(`cd ${repoPath} && git push origin ${branchName}`);
+    } catch (error) {
+      console.error("ブランチ作成・プッシュエラー:", error);
+      throw new Error("ブランチの作成とプッシュに失敗しました");
+    }
+  }
+
+  /**
+   * コード修正をBacklogにプッシュしてプルリクエストを作成
+   */
+  async submitCodeChanges(
+    reviewId: number,
+    projectIdOrKey: string,
+    repoIdOrName: string,
+    baseBranch: string = "master"
+  ): Promise<any> {
+    let tempRepoDir = "";
+
+    try {
+      // レビュー情報を取得
+      const reviewRepository = AppDataSource.getRepository(Review);
+      const review = await reviewRepository.findOne({
+        where: { id: reviewId },
+        relations: ["user"],
+      });
+
+      if (!review) {
+        throw new Error("レビューが見つかりません");
+      }
+
+      // ユーザー情報を取得
+      const user = await AppDataSource.getRepository(User).findOne({
+        where: { id: review.user.id },
+      });
+
+      if (!user) {
+        throw new Error("ユーザーが見つかりません");
+      }
+
+      // 最新のコード提出を取得
+      const submissionRepository = AppDataSource.getRepository(CodeSubmission);
+      const latestSubmission = await submissionRepository.findOne({
+        where: { review_id: reviewId },
+        order: { version: "DESC" },
+      });
+
+      if (!latestSubmission) {
+        throw new Error("コード提出が見つかりません");
+      }
+
+      // リポジトリをクローン
+      tempRepoDir = await this.cloneRepository(
+        projectIdOrKey,
+        repoIdOrName,
+        baseBranch
+      );
+
+      // ブランチ名を生成（ユーザー名_reviewId_タイムスタンプ）
+      const branchName = `review_${reviewId}_${Date.now()}`;
+
+      // ファイルを作成（実際にはコード内容に応じて適切なファイルパスを設定する必要があります）
+      const files = [
+        {
+          path: `review_${reviewId}/${review.title.replace(
+            /[^\w\s]/gi,
+            "_"
+          )}.js`,
+          content: latestSubmission.code_content,
+        },
+      ];
+
+      // コミットメッセージを設定
+      const commitMessage = `コードレビュー #${reviewId}: ${review.title}`;
+
+      // ブランチを作成してプッシュ
+      await this.createBranchAndPush(
+        tempRepoDir,
+        branchName,
+        files,
+        commitMessage
+      );
+
+      // プルリクエストを作成
+      const pullRequestParams = {
+        title: `【コードレビュー】${review.title}`,
+        description: `
+## コードレビュー提出
+
+### レビュー情報
+- レビューID: ${reviewId}
+- タイトル: ${review.title}
+- 提出者: ${user.name}
+- 提出バージョン: ${latestSubmission.version}
+
+### 説明
+${review.description || "なし"}
+
+### 提出コメント
+${latestSubmission.expectation || "なし"}
+`,
+        base: baseBranch,
+        branch: branchName,
+      };
+
+      const pullRequest = await this.createPullRequest(
+        projectIdOrKey,
+        repoIdOrName,
+        pullRequestParams
+      );
+
+      return pullRequest;
+    } catch (error) {
+      console.error("コード変更提出エラー:", error);
+      throw error;
+    } finally {
+      // 一時ディレクトリを削除
+      if (tempRepoDir && fs.existsSync(tempRepoDir)) {
+        try {
+          await rmdirPromise(tempRepoDir, { recursive: true });
+        } catch (rmError) {
+          console.error("一時ディレクトリ削除エラー:", rmError);
+        }
+      }
+    }
+  }
+}

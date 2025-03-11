@@ -46,11 +46,21 @@ import authRoutes from "./routes/authRoutes";
 import reviewRoutes from "./routes/reviewRoutes";
 import submissionRoutes from "./routes/submissionRoutes";
 import queueRoutes from "./routes/queueRoutes";
+import employeeRoutes from "./routes/employeeRoutes";
+import analyticsRoutes from "./routes/analyticsRoutes";
+import backlogRoutes from "./routes/backlogRoutes";
+import progressRoutes from "./routes/progressRoutes";
+import settingsRoutes from "./routes/settingsRoutes";
 app.use("/api/auth", authRoutes);
 // 他のルートは後で実装
 app.use("/api/reviews", reviewRoutes);
 app.use("/api/submissions", submissionRoutes);
 app.use("/api/queue", queueRoutes);
+app.use("/api/employees", employeeRoutes);
+app.use("/api/analytics", analyticsRoutes);
+app.use("/api/backlog", backlogRoutes);
+app.use("/api/progress", progressRoutes);
+app.use("/api/settings", settingsRoutes);
 
 // エラーハンドリングミドルウェア
 app.use(

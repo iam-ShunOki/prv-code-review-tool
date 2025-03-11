@@ -23,6 +23,7 @@ import {
   AlertCircle,
   ChevronRight,
   ChevronDown,
+  GitPullRequest,
 } from "lucide-react";
 
 // Monaco Editor をクライアントサイドのみでロード
@@ -445,11 +446,19 @@ export default function ReviewDetailPage({
           >
             レビュー一覧に戻る
           </Button>
-          <Button asChild>
-            <Link href={`/dashboard/reviews/${review.id}/submit`}>
-              修正版を提出
-            </Link>
-          </Button>
+          <div className="space-x-2">
+            <Button variant="outline" asChild>
+              <Link href={`/dashboard/reviews/${review.id}/backlog`}>
+                <GitPullRequest className="mr-2 h-4 w-4" />
+                Backlogへ送信
+              </Link>
+            </Button>
+            <Button asChild>
+              <Link href={`/dashboard/reviews/${review.id}/submit`}>
+                修正版を提出
+              </Link>
+            </Button>
+          </div>
         </CardFooter>
       </Card>
     </div>

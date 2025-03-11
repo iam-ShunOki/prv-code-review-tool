@@ -7,7 +7,13 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import dynamic from "next/dynamic";
-import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
+import {
+  Card,
+  CardHeader,
+  CardTitle,
+  CardContent,
+  CardFooter,
+} from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -15,7 +21,9 @@ import { useToast } from "@/components/ui/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 
 // Monaco Editor をクライアントサイドのみでロード
-const MonacoEditor = dynamic(() => import("react-monaco-editor"), { ssr: false });
+const MonacoEditor = dynamic(() => import("react-monaco-editor"), {
+  ssr: false,
+});
 
 // フォームのバリデーションスキーマ
 const reviewSchema = z.object({
@@ -108,12 +116,16 @@ export default function NewReviewPage() {
       });
 
       // レビュー一覧ページに遷移
-      router.push("/dashboard/reviews");
+      // router.push("/dashboard/reviews");
+      router.push(`/dashboard/reviews/${reviewId}`);
     } catch (error) {
       console.error("レビュー依頼エラー:", error);
       toast({
         title: "エラーが発生しました",
-        description: error instanceof Error ? error.message : "レビュー依頼の送信に失敗しました",
+        description:
+          error instanceof Error
+            ? error.message
+            : "レビュー依頼の送信に失敗しました",
         variant: "destructive",
       });
     } finally {
