@@ -36,6 +36,9 @@ services:
     restart: unless-stopped
     volumes:
       - chroma-data:/chroma/chroma
+      - ../vector-db/data:/vector-db/data
+    environment:
+      - PERSIST_DIRECTORY=/vector-db/data
     ports:
       - 8000:8000
 

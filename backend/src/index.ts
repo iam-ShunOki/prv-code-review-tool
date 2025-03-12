@@ -4,6 +4,9 @@ import cors from "cors";
 import morgan from "morgan";
 import dotenv from "dotenv";
 import { AppDataSource } from "./data-source";
+import { PullRequestMonitoringService } from "./services/PullRequestMonitoringService";
+import { WebhookUrlService } from "./services/WebhookUrlService";
+import { RepositoryWhitelistService } from "./services/RepositoryWhitelistService";
 
 // 環境変数の読み込み
 dotenv.config();
@@ -19,6 +22,25 @@ app.use(morgan("dev"));
 // データベース接続設定
 // 注: AppDataSourceはdata-source.tsから既にインポート済み
 
+// プルリクエストモニタリングの初期化
+async function initializePullRequestMonitoring() {
+  try {
+    console.log("Initializing pull request monitoring...");
+    const monitoringService = new PullRequestMonitoringService();
+    const result = await monitoringService.checkExistingPullRequests();
+    console.log(
+      `Pull request monitoring initialized: processed ${result.processed} PRs, skipped ${result.skipped} PRs`
+    );
+    // WebhookUrlServiceの初期化
+    const webhookUrlService = WebhookUrlService.getInstance();
+    console.log(
+      `Current webhook base URL: ${webhookUrlService.getWebhookBaseUrl()}`
+    );
+  } catch (error) {
+    console.error("Error initializing pull request monitoring:", error);
+  }
+}
+
 // サーバー起動関数
 async function startServer() {
   try {
@@ -26,10 +48,17 @@ async function startServer() {
     await AppDataSource.initialize();
     console.log("データベースに接続しました");
 
+    // リポジトリホワイトリストを初期化
+    await RepositoryWhitelistService.getInstance().initialize();
+    console.log("リポジトリホワイトリストを初期化しました");
+
     // ルートルートのセットアップ
     app.get("/", (req, res) => {
       res.json({ message: "コードレビューツール API サーバー" });
     });
+
+    // プルリクエストモニタリングを初期化
+    await initializePullRequestMonitoring();
 
     // サーバー起動
     app.listen(PORT, () => {
@@ -52,6 +81,9 @@ import backlogRoutes from "./routes/backlogRoutes";
 import progressRoutes from "./routes/progressRoutes";
 import settingsRoutes from "./routes/settingsRoutes";
 import feedbackRoutes from "./routes/feedbackRoutes";
+import adminRepositoryRoutes from "./routes/adminRepositoryRoutes";
+import webhookRoutes from "./routes/webhookRoutes";
+import repositoryWhitelistRoutes from "./routes/repositoryWhitelistRoutes";
 
 // ルートの登録
 app.use("/api/auth", authRoutes);
@@ -64,6 +96,9 @@ app.use("/api/backlog", backlogRoutes);
 app.use("/api/progress", progressRoutes);
 app.use("/api/settings", settingsRoutes);
 app.use("/api/feedback", feedbackRoutes);
+app.use("/api/admin/repositories", adminRepositoryRoutes);
+app.use("/api/webhooks", webhookRoutes);
+app.use("/api/admin/repository-whitelist", repositoryWhitelistRoutes);
 
 // エラーハンドリング強化
 app.use(

@@ -299,4 +299,160 @@ ${latestSubmission.expectation || "なし"}
       }
     }
   }
+  /**
+   * 一時ディレクトリを削除する
+   */
+  async cleanupTempDirectory(tempDir: string): Promise<void> {
+    try {
+      if (fs.existsSync(tempDir)) {
+        await rmdirPromise(tempDir, { recursive: true });
+        console.log(`一時ディレクトリを削除しました: ${tempDir}`);
+      }
+    } catch (error) {
+      console.error("一時ディレクトリ削除エラー:", error);
+      throw new Error("一時ディレクトリの削除に失敗しました");
+    }
+  }
+
+  /**
+   * Get pull requests for a repository
+   */
+  async getPullRequests(
+    projectIdOrKey: string,
+    repoIdOrName: string,
+    statusFilters: "open" | "closed" | "merged" | "all" = "all"
+  ): Promise<any[]> {
+    try {
+      const params: any = {
+        apiKey: this.apiKey,
+      };
+
+      // Filter by status if specified
+      if (statusFilters !== "all") {
+        params.statusId = this.getPullRequestStatusId(statusFilters);
+      }
+
+      const response = await axios.get(
+        `${this.baseUrl}/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/pullRequests`,
+        { params }
+      );
+
+      return response.data;
+    } catch (error) {
+      console.error("Backlog API - Pull requests fetch error:", error);
+      throw new Error("Failed to fetch pull requests");
+    }
+  }
+
+  /**
+   * Get pull request details by ID
+   */
+  async getPullRequestById(
+    projectIdOrKey: string,
+    repoIdOrName: string,
+    pullRequestId: number
+  ): Promise<any> {
+    try {
+      const response = await axios.get(
+        `${this.baseUrl}/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/pullRequests/${pullRequestId}`,
+        {
+          params: {
+            apiKey: this.apiKey,
+          },
+        }
+      );
+      return response.data;
+    } catch (error) {
+      console.error(
+        `Backlog API - Pull request #${pullRequestId} fetch error:`,
+        error
+      );
+      throw new Error(`Failed to fetch pull request #${pullRequestId}`);
+    }
+  }
+
+  /**
+   * Get diff files for a pull request
+   */
+  async getPullRequestDiff(
+    projectIdOrKey: string,
+    repoIdOrName: string,
+    pullRequestId: number
+  ): Promise<any> {
+    try {
+      const response = await axios.get(
+        `${this.baseUrl}/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/pullRequests/${pullRequestId}/diff`,
+        {
+          params: {
+            apiKey: this.apiKey,
+          },
+        }
+      );
+
+      return response.data;
+    } catch (error) {
+      console.error("Backlog API - Pull request diff fetch error:", error);
+      throw new Error("Failed to fetch pull request diff");
+    }
+  }
+
+  /**
+   * プルリクエストにコメントを追加
+   */
+  async addPullRequestComment(
+    projectIdOrKey: string,
+    repoIdOrName: string,
+    pullRequestId: number,
+    comment: string
+  ): Promise<any> {
+    try {
+      const response = await axios.post(
+        `${this.baseUrl}/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/pullRequests/${pullRequestId}/comments`,
+        {
+          content: comment,
+        },
+        {
+          params: {
+            apiKey: this.apiKey,
+          },
+        }
+      );
+
+      return response.data;
+    } catch (error) {
+      console.error("Backlog API - プルリクエストコメント追加エラー:", error);
+      throw new Error("プルリクエストへのコメント追加に失敗しました");
+    }
+  }
+
+  /**
+   * Clean up cloned repository directory
+   */
+  async cleanupRepository(repoPath: string): Promise<void> {
+    try {
+      if (fs.existsSync(repoPath)) {
+        await rmdirPromise(repoPath, { recursive: true });
+        console.log(`Cleaned up repository directory: ${repoPath}`);
+      }
+    } catch (error) {
+      console.error("Repository cleanup error:", error);
+      throw new Error("Failed to clean up repository directory");
+    }
+  }
+
+  /**
+   * Convert status string to Backlog status ID
+   */
+  private getPullRequestStatusId(status: "open" | "closed" | "merged"): number {
+    switch (status) {
+      case "open":
+        return 1;
+      case "closed":
+        return 2;
+      case "merged":
+        return 3;
+      default:
+        return 1;
+    }
+  }
 }

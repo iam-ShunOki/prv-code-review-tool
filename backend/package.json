@@ -11,7 +11,12 @@
     "typecheck": "tsc --noEmit",
     "migration:run": "typeorm-ts-node-commonjs migration:run -d src/data-source.ts",
     "migration:revert": "typeorm-ts-node-commonjs migration:revert -d src/data-source.ts",
-    "migration:create": "typeorm-ts-node-commonjs migration:create"
+    "migration:create": "typeorm-ts-node-commonjs migration:create",
+    "ngrok": "ngrok http 3001",
+    "setup-ngrok": "node scripts/setup-ngrok.js",
+    "fix-ngrok-config": "node scripts/fix-ngrok-config.js",
+    "detect-ngrok": "node scripts/detect-ngrok.js",
+    "dev:with-ngrok": "concurrently \"npm run dev\" \"npm run ngrok\""
   },
   "dependencies": {
     "@langchain/community": "^0.0.10",
@@ -29,7 +34,9 @@
     "mysql2": "^3.5.2",
     "reflect-metadata": "^0.1.13",
     "typeorm": "^0.3.17",
-    "zod": "^3.21.4"
+    "zod": "^3.21.4",
+    "chroma-js": "^2.1.1",
+    "glob": "^10.3.10"
   },
   "devDependencies": {
     "@types/bcrypt": "^5.0.0",
@@ -44,6 +51,9 @@
     "eslint": "^8.46.0",
     "nodemon": "^3.0.1",
     "ts-node": "^10.9.1",
-    "typescript": "^5.1.6"
+    "typescript": "^5.1.6",
+    "concurrently": "^8.2.0",
+    "axios": "^1.6.0",
+    "ngrok": "^5.0.0-beta.2"
   }
 }

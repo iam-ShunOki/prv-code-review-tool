@@ -13,6 +13,7 @@ import {
   CardFooter,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { FeedbackList } from "@/components/feedback/feedback-list";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/components/ui/use-toast";
 import {
@@ -25,8 +26,6 @@ import {
   ChevronDown,
   GitPullRequest,
 } from "lucide-react";
-import { FeedbackStatusButton } from "@/components/feedback/FeedbackStatusButton";
-import { FeedbackProgress } from "@/components/feedback/FeedbackProgress";
 
 // Monaco Editor をクライアントサイドのみでロード
 const MonacoEditor = dynamic(() => import("react-monaco-editor"), {
@@ -62,15 +61,12 @@ interface Feedback {
   suggestion: string;
   priority: "high" | "medium" | "low";
   line_number: number | null;
-  is_resolved: boolean;
   created_at: string;
 }
 
-interface ResolutionRate {
-  total: number;
-  resolved: number;
-  rate: number;
-}
+// ローカルストレージのキー
+const getResolvedFeedbacksKey = (reviewId: string) =>
+  `resolved_feedbacks_${reviewId}`;
 
 export default function ReviewDetailPage({
   params,
@@ -83,12 +79,13 @@ export default function ReviewDetailPage({
     null
   );
   const [refreshTrigger, setRefreshTrigger] = useState(0); // 自動更新のためのトリガー
-  const [feedbackStats, setFeedbackStats] = useState<
-    Map<number, ResolutionRate>
-  >(new Map());
+  const [resolvedFeedbacks, setResolvedFeedbacks] = useState<number[]>([]);
   const { user, token } = useAuth();
   const { toast } = useToast();
   const router = useRouter();
+
+  // 管理者かどうかを判定
+  const isAdmin = user?.role === "admin";
 
   useEffect(() => {
     const fetchReviewDetail = async () => {
@@ -138,16 +135,15 @@ export default function ReviewDetailPage({
             if (hasSubmittedSubmissions) {
               setTimeout(() => setRefreshTrigger((prev) => prev + 1), 5000);
             }
-
-            // 各提出のフィードバック統計情報を取得
-            await Promise.all(
-              submissionsData.data.map(async (submission: CodeSubmission) => {
-                if (submission.feedbacks && submission.feedbacks.length > 0) {
-                  await fetchFeedbackStats(submission.id);
-                }
-              })
-            );
           }
+        }
+
+        // ローカルストレージから解決済みフィードバックのIDを取得
+        const storedResolvedFeedbacks = localStorage.getItem(
+          getResolvedFeedbacksKey(params.id)
+        );
+        if (storedResolvedFeedbacks) {
+          setResolvedFeedbacks(JSON.parse(storedResolvedFeedbacks));
         }
       } catch (error) {
         console.error("レビュー詳細取得エラー:", error);
@@ -166,57 +162,27 @@ export default function ReviewDetailPage({
     }
   }, [params.id, token, toast, refreshTrigger]);
 
-  // フィードバック統計情報を取得
-  const fetchFeedbackStats = async (submissionId: number) => {
-    try {
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/feedback/submission/${submissionId}`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      );
+  // フィードバックの解決状態を切り替える
+  const handleMarkResolved = (feedbackId: number, resolved: boolean) => {
+    let updatedResolvedFeedbacks;
 
-      if (response.ok) {
-        const data = await response.json();
-        setFeedbackStats((prev) => {
-          const newStats = new Map(prev);
-          newStats.set(submissionId, data.data.resolutionRate);
-          return newStats;
-        });
-      }
-    } catch (error) {
-      console.error(
-        `フィードバック統計取得エラー (提出ID: ${submissionId}):`,
-        error
+    if (resolved) {
+      // 解決済みリストに追加
+      updatedResolvedFeedbacks = [...resolvedFeedbacks, feedbackId];
+    } else {
+      // 解決済みリストから削除
+      updatedResolvedFeedbacks = resolvedFeedbacks.filter(
+        (id) => id !== feedbackId
       );
     }
-  };
 
-  // フィードバックステータス変更時のハンドラー
-  const handleFeedbackStatusChange = async (
-    feedbackId: number,
-    newStatus: boolean
-  ) => {
-    if (!review) return;
+    setResolvedFeedbacks(updatedResolvedFeedbacks);
 
-    // ローカルステートを更新
-    const updatedReview = { ...review };
-
-    // 該当するフィードバックを検索して更新
-    updatedReview.submissions.forEach((submission) => {
-      submission.feedbacks.forEach((feedback) => {
-        if (feedback.id === feedbackId) {
-          feedback.is_resolved = newStatus;
-        }
-      });
-
-      // 該当する提出のフィードバック統計を更新
-      fetchFeedbackStats(submission.id);
-    });
-
-    setReview(updatedReview);
+    // ローカルストレージに保存
+    localStorage.setItem(
+      getResolvedFeedbacksKey(params.id),
+      JSON.stringify(updatedResolvedFeedbacks)
+    );
   };
 
   // ステータスに応じたバッジを返す関数
@@ -436,72 +402,17 @@ export default function ReviewDetailPage({
                             )}
 
                             <div>
-                              <div className="flex justify-between items-center mb-3">
-                                <h4 className="text-sm font-medium">
-                                  フィードバック
-                                </h4>
-                                {submission.feedbacks &&
-                                  submission.feedbacks.length > 0 &&
-                                  feedbackStats.has(submission.id) && (
-                                    <FeedbackProgress
-                                      total={
-                                        feedbackStats.get(submission.id)
-                                          ?.total || 0
-                                      }
-                                      resolved={
-                                        feedbackStats.get(submission.id)
-                                          ?.resolved || 0
-                                      }
-                                    />
-                                  )}
-                              </div>
-
+                              <h4 className="text-sm font-medium mb-2">
+                                フィードバック
+                              </h4>
                               {submission.feedbacks &&
                               submission.feedbacks.length > 0 ? (
-                                <div className="space-y-3">
-                                  {submission.feedbacks.map((feedback) => (
-                                    <Card key={feedback.id} className="p-3">
-                                      <div className="flex justify-between">
-                                        <h5 className="font-medium">
-                                          {feedback.problem_point}
-                                        </h5>
-                                        <div
-                                          className={`text-xs px-2 py-1 rounded ${
-                                            feedback.priority === "high"
-                                              ? "bg-red-100 text-red-600"
-                                              : feedback.priority === "medium"
-                                              ? "bg-yellow-100 text-yellow-600"
-                                              : "bg-blue-100 text-blue-600"
-                                          }`}
-                                        >
-                                          {feedback.priority === "high"
-                                            ? "高"
-                                            : feedback.priority === "medium"
-                                            ? "中"
-                                            : "低"}
-                                          優先度
-                                        </div>
-                                      </div>
-                                      <p className="text-sm mt-2">
-                                        {feedback.suggestion}
-                                      </p>
-                                      <div className="flex justify-between items-center mt-3">
-                                        {feedback.line_number && (
-                                          <p className="text-xs text-gray-500">
-                                            {feedback.line_number}行目
-                                          </p>
-                                        )}
-                                        <FeedbackStatusButton
-                                          feedbackId={feedback.id}
-                                          initialStatus={feedback.is_resolved}
-                                          onStatusChange={
-                                            handleFeedbackStatusChange
-                                          }
-                                        />
-                                      </div>
-                                    </Card>
-                                  ))}
-                                </div>
+                                <FeedbackList
+                                  feedbacks={submission.feedbacks}
+                                  onMarkResolved={handleMarkResolved}
+                                  resolvedFeedbacks={resolvedFeedbacks}
+                                  showResolved={true}
+                                />
                               ) : submission.status === "submitted" ? (
                                 <div className="bg-gray-50 p-6 rounded-md text-center">
                                   <div className="animate-pulse flex flex-col items-center">
@@ -545,19 +456,23 @@ export default function ReviewDetailPage({
           >
             レビュー一覧に戻る
           </Button>
-          <div className="space-x-2">
-            <Button variant="outline" asChild>
-              <Link href={`/dashboard/reviews/${review.id}/backlog`}>
-                <GitPullRequest className="mr-2 h-4 w-4" />
-                Backlogへ送信
-              </Link>
-            </Button>
-            <Button asChild>
-              <Link href={`/dashboard/reviews/${review.id}/submit`}>
-                修正版を提出
-              </Link>
-            </Button>
-          </div>
+
+          {/* 管理者以外のユーザーにのみ表示 */}
+          {!isAdmin && (
+            <div className="space-x-2">
+              <Button variant="outline" asChild>
+                <Link href={`/dashboard/reviews/${review.id}/backlog`}>
+                  <GitPullRequest className="mr-2 h-4 w-4" />
+                  Backlogへ送信
+                </Link>
+              </Button>
+              <Button asChild>
+                <Link href={`/dashboard/reviews/${review.id}/submit`}>
+                  修正版を提出
+                </Link>
+              </Button>
+            </div>
+          )}
         </CardFooter>
       </Card>
     </div>

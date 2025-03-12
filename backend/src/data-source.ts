@@ -12,8 +12,11 @@ import { AddSessionsTable1625000000100 } from "./migrations/1625000000100-AddSes
 import { AddNotificationSettingsTable1625000000200 } from "./migrations/1625000000200-AddNotificationSettingsTable";
 import { CreateTestData1625000000300 } from "./migrations/1625000000300-CreateTestData";
 import { AddFeedbackStatusColumn1625000000400 } from "./migrations/1625000000400-AddFeedbackStatusColumn";
+import { AddBacklogRepositoriesTable1625000000500 } from "./migrations/1625000000500-AddBacklogRepositoriesTable";
+import { AddBacklogPrTracking1625000000600 } from "./migrations/1625000000600-AddBacklogPrTracking";
 import dotenv from "dotenv";
 import { NotificationSettings } from "./models/NotificationSettings";
+import { BacklogRepository } from "./models/BacklogRepository";
 
 // 環境変数の読み込み
 dotenv.config();
@@ -36,6 +39,7 @@ export const AppDataSource = new DataSource({
     CodeEmbedding,
     Session,
     NotificationSettings,
+    BacklogRepository,
   ],
   migrations: [
     InitialSchema1625000000000,
@@ -43,6 +47,8 @@ export const AppDataSource = new DataSource({
     AddNotificationSettingsTable1625000000200,
     CreateTestData1625000000300,
     AddFeedbackStatusColumn1625000000400,
+    AddBacklogRepositoriesTable1625000000500,
+    AddBacklogPrTracking1625000000600,
   ],
   subscribers: [],
 });

@@ -265,8 +265,27 @@ export default function AnalyticsPage() {
       const url = `${process.env.NEXT_PUBLIC_API_URL}/api/analytics/export${
         selectedYear ? `?joinYear=${selectedYear}` : ""
       }`;
-
-      // 新しいタブでエクスポートURLを開く
+      const response = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (!response.ok) {
+        throw new Error("エクスポートに失敗しました");
+      }
+      const blob = await response.blob();
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      const contentDisposition = response.headers.get("Content-Disposition");
+      let filename = "analytics_export.json";
+      if (contentDisposition && contentDisposition.includes("filename=")) {
+        filename = contentDisposition.split("filename=")[1].replace(/"/g, "");
+      }
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
       window.open(url, "_blank");
     } catch (error) {
       console.error("データエクスポートエラー:", error);

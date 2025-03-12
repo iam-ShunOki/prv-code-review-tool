@@ -255,34 +255,32 @@ export default function ReviewsPage() {
           <div className="grid grid-cols-1 gap-4">
             {getCurrentPageData().map((review) => (
               <Card key={review.id} className="overflow-hidden">
-                <CardHeader className="bg-gray-50 pb-3">
-                  <div className="flex justify-between items-start">
-                    <CardTitle className="text-lg">{review.title}</CardTitle>
+                <CardHeader className="bg-gray-50 py-3 px-2">
+                  <div className="flex justify-between items-center">
+                    <CardTitle className="text-md">{review.title}</CardTitle>
                     {getStatusBadge(review.status)}
                   </div>
                 </CardHeader>
-                <CardContent className="pt-4">
-                  <p className="text-sm text-gray-600 line-clamp-2">
+                <CardContent className="py-2 px-2">
+                  <p className="text-xs mt-2 text-gray-600 line-clamp-1">
                     {review.description || "説明はありません"}
                   </p>
-                  <div className="mt-4 text-xs text-gray-500">
+                  <div className="mt-2 text-xs text-gray-500 flex items-center justify-between">
                     作成日: {formatDate(review.created_at)}
+                    <Button className="flex" variant="outline" size="sm">
+                      <Link href={`/dashboard/reviews/${review.id}`}>
+                        詳細を見る
+                      </Link>
+                    </Button>
                   </div>
                 </CardContent>
-                <CardFooter className="bg-gray-50 flex justify-end">
-                  <Button variant="outline" size="sm" asChild>
-                    <Link href={`/dashboard/reviews/${review.id}`}>
-                      詳細を見る
-                    </Link>
-                  </Button>
-                </CardFooter>
               </Card>
             ))}
           </div>
 
           {/* ページネーション */}
-          {totalPages > 1 && (
-            <Pagination className="mt-4">
+          <div className="fixed bottom-0 left-0 right-0 p-4">
+            <Pagination>
               <PaginationContent>
                 {/* 前のページへのリンク */}
                 {currentPage > 1 && (
@@ -306,7 +304,7 @@ export default function ReviewsPage() {
                 )}
               </PaginationContent>
             </Pagination>
-          )}
+          </div>
         </>
       )}
     </div>

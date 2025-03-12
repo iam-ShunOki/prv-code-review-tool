@@ -14,6 +14,7 @@ import {
   LogOut,
   Menu,
   X,
+  GitFork,
 } from "lucide-react";
 
 export function Sidebar() {
@@ -65,6 +66,11 @@ export function Sidebar() {
       ? [
           { name: "分析", href: "/dashboard/analytics", icon: BarChart },
           { name: "社員管理", href: "/dashboard/employees", icon: Users },
+          {
+            name: "リポジトリ管理",
+            href: "/dashboard/admin/repositories",
+            icon: GitFork,
+          },
         ]
       : []),
     { name: "設定", href: "/dashboard/settings", icon: Settings },

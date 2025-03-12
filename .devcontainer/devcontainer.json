@@ -11,7 +11,9 @@
         "ms-vscode.vscode-typescript-next",
         "bradlc.vscode-tailwindcss",
         "formulahendry.auto-rename-tag",
-        "ms-azuretools.vscode-docker"
+        "ms-azuretools.vscode-docker",
+        "codeium.codeium",
+        "github.copilot"
       ],
       "settings": {
         "editor.formatOnSave": true,
