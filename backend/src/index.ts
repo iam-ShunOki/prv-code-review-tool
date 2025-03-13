@@ -7,6 +7,7 @@ import { AppDataSource } from "./data-source";
 import { PullRequestMonitoringService } from "./services/PullRequestMonitoringService";
 import { WebhookUrlService } from "./services/WebhookUrlService";
 import { RepositoryWhitelistService } from "./services/RepositoryWhitelistService";
+import { ReviewFeedbackSenderService } from "./services/ReviewFeedbackSenderService";
 
 // 環境変数の読み込み
 dotenv.config();
@@ -19,53 +20,99 @@ app.use(cors());
 app.use(express.json());
 app.use(morgan("dev"));
 
-// データベース接続設定
-// 注: AppDataSourceはdata-source.tsから既にインポート済み
-
-// プルリクエストモニタリングの初期化
+/**
+ * プルリクエストモニタリングの初期化
+ */
 async function initializePullRequestMonitoring() {
   try {
+    console.log("=========================================");
     console.log("Initializing pull request monitoring...");
-    const monitoringService = new PullRequestMonitoringService();
-    const result = await monitoringService.checkExistingPullRequests();
-    console.log(
-      `Pull request monitoring initialized: processed ${result.processed} PRs, skipped ${result.skipped} PRs`
-    );
-    // WebhookUrlServiceの初期化
+    console.log("=========================================");
+
+    // ホワイトリストの初期化（先に実行）
+    const whitelistService = RepositoryWhitelistService.getInstance();
+    await whitelistService.initialize();
+
+    // WebhookUrl初期化
     const webhookUrlService = WebhookUrlService.getInstance();
     console.log(
       `Current webhook base URL: ${webhookUrlService.getWebhookBaseUrl()}`
     );
+    console.log(
+      `Backlog webhook endpoint: ${webhookUrlService.getWebhookUrl(
+        "/api/backlog/webhook"
+      )}`
+    );
+
+    // 5秒待機してから実行（他の初期化処理が完了するのを待つ）
+    console.log("Waiting 5 seconds before checking existing pull requests...");
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+
+    // プルリクエスト監視サービス初期化
+    const monitoringService = new PullRequestMonitoringService();
+
+    // 既存プルリクエストのチェック
+    console.log("Starting check of existing pull requests...");
+    const result = await monitoringService.checkExistingPullRequests();
+    console.log(
+      `Pull request check completed: processed ${result.processed} PRs, skipped ${result.skipped} PRs`
+    );
+
+    // 15分ごとに未送信のレビューフィードバックを送信
+    console.log("Setting up feedback sender scheduler");
+    setInterval(async () => {
+      try {
+        const feedbackSender = new ReviewFeedbackSenderService();
+        const sendResult = await feedbackSender.sendPendingReviewFeedbacks();
+        console.log(
+          `Feedback sender ran: ${sendResult.success} sent, ${sendResult.failed} failed, ${sendResult.skipped} skipped`
+        );
+      } catch (error) {
+        console.error("Error in feedback sender scheduler:", error);
+      }
+    }, 15 * 60 * 1000); // 15分ごと
+
+    console.log("Pull request monitoring initialization completed");
   } catch (error) {
     console.error("Error initializing pull request monitoring:", error);
   }
 }
 
-// サーバー起動関数
+/**
+ * サーバー起動関数
+ */
 async function startServer() {
   try {
     // データベース接続
     await AppDataSource.initialize();
-    console.log("データベースに接続しました");
+    console.log("Database connection established");
+
+    // マイグレーションの実行（必要に応じて）
+    // await AppDataSource.runMigrations();
+    // console.log("Database migrations applied");
 
     // リポジトリホワイトリストを初期化
     await RepositoryWhitelistService.getInstance().initialize();
-    console.log("リポジトリホワイトリストを初期化しました");
+    console.log("Repository whitelist initialized");
 
-    // ルートルートのセットアップ
-    app.get("/", (req, res) => {
-      res.json({ message: "コードレビューツール API サーバー" });
-    });
-
-    // プルリクエストモニタリングを初期化
-    await initializePullRequestMonitoring();
+    // ルートルートのセットアップ（省略）...
 
     // サーバー起動
     app.listen(PORT, () => {
-      console.log(`サーバーが起動しました: http://localhost:${PORT}`);
+      console.log(`Server started: http://localhost:${PORT}`);
+
+      // サーバー起動後にバックグラウンドでプルリクエストモニタリングを初期化
+      setTimeout(() => {
+        initializePullRequestMonitoring().catch((error) => {
+          console.error(
+            "Error in delayed pull request monitoring initialization:",
+            error
+          );
+        });
+      }, 2000);
     });
   } catch (error) {
-    console.error("サーバー起動エラー:", error);
+    console.error("Server startup error:", error);
     process.exit(1);
   }
 }

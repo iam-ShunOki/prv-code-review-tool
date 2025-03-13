@@ -24,7 +24,34 @@ export class BacklogService {
     this.apiKey = process.env.BACKLOG_API_KEY || "";
     this.spaceKey = process.env.BACKLOG_SPACE || "";
     this.baseUrl = `https://${this.spaceKey}.backlog.jp/api/v2`;
-    this.tempDir = path.join(__dirname, "../../temp");
+
+    // 一時ディレクトリをプロジェクト外に配置
+    // Windows環境の場合
+    if (process.platform === "win32") {
+      this.tempDir = path.join(
+        process.env.TEMP || "C:\\temp",
+        "codereview-temp"
+      );
+    }
+    // Linux/Mac環境の場合
+    else {
+      this.tempDir = path.join("/tmp", "codereview-temp");
+    }
+
+    // 一時ディレクトリが存在しない場合は作成
+    if (!fs.existsSync(this.tempDir)) {
+      try {
+        fs.mkdirSync(this.tempDir, { recursive: true });
+        console.log(`Created temp directory: ${this.tempDir}`);
+      } catch (error) {
+        console.error(`Failed to create temp directory: ${error}`);
+        // フォールバックとしてプロジェクト内のtempディレクトリを使用
+        this.tempDir = path.join(__dirname, "../../temp");
+        if (!fs.existsSync(this.tempDir)) {
+          fs.mkdirSync(this.tempDir, { recursive: true });
+        }
+      }
+    }
   }
 
   /**
@@ -49,10 +76,7 @@ export class BacklogService {
    */
   async getRepositories(projectIdOrKey: string): Promise<any[]> {
     try {
-      console.log(`apiKey: ${this.apiKey}`);
-      console.log(
-        `requestUrl: ${this.baseUrl}/projects/${projectIdOrKey}/git/repositories`
-      );
+      console.log(`Fetching repositories for project: ${projectIdOrKey}`);
       const response = await axios.get(
         `${this.baseUrl}/projects/${projectIdOrKey}/git/repositories`,
         {
@@ -68,6 +92,9 @@ export class BacklogService {
     }
   }
 
+  /**
+   * Backlogのリポジトリをクローン
+   */
   async cloneRepository(
     projectIdOrKey: string,
     repoIdOrName: string,
@@ -84,23 +111,20 @@ export class BacklogService {
         await mkdirPromise(this.tempDir, { recursive: true });
       }
 
-      // APIキーを使用したGit URL（ユーザー名は何でも良い、パスワード部分にAPIキーを設定）
-      // const gitUrl = `https://apikey:${this.apiKey}@${this.spaceKey}.backlog.jp/git/${projectIdOrKey}/${repoIdOrName}.git`;
-      // const gitUrl = `https://${this.spaceKey}.backlog.jp/git/${projectIdOrKey}/${repoIdOrName}.git?apiKey=${this.apiKey}`;
-      // const gitUrl = `${this.spaceKey}@${this.spaceKey}.git.backlog.jp:/CRUSH/CRUSH.git?apiKey=${this.apiKey}`;
-      // const gitUrl = `${this.spaceKey}@${this.spaceKey}.backlog.jp:git/${projectIdOrKey}/${repoIdOrName}.git`;
+      // Backlogドキュメントに準拠したSSH URLの構築
       const gitUrl = `${this.spaceKey}@${this.spaceKey}.git.backlog.jp:/${projectIdOrKey}/${repoIdOrName}.git`;
-      console.log(`gitUrl: ${gitUrl}`);
+      console.log(`Using SSH git URL: ${gitUrl}`);
 
       // クローンコマンドを実行
       const command = `git clone -b ${branch} ${gitUrl} ${tempRepoDir}`;
+      console.log(`Executing clone command: ${command}`);
+      const { stdout, stderr } = await execPromise(command);
 
-      console.log(
-        `Cloning repository: ${projectIdOrKey}/${repoIdOrName} (${branch})`
-      );
+      if (stderr && !stderr.includes("Cloning into")) {
+        console.warn(`Clone warning: ${stderr}`);
+      }
 
-      // コマンドを実行（ログにAPIキーが出ないように注意）
-      await execPromise(command);
+      console.log(`Clone stdout: ${stdout}`);
       console.log(`Repository cloned to ${tempRepoDir}`);
 
       return tempRepoDir;
@@ -136,6 +160,7 @@ export class BacklogService {
     }
   ): Promise<any> {
     try {
+      console.log(`Creating pull request in ${projectIdOrKey}/${repoIdOrName}`);
       const response = await axios.post(
         `${this.baseUrl}/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/pullRequests`,
         {
@@ -149,6 +174,9 @@ export class BacklogService {
             apiKey: this.apiKey,
           },
         }
+      );
+      console.log(
+        `Pull request created successfully: #${response.data.number}`
       );
       return response.data;
     } catch (error) {
@@ -167,6 +195,7 @@ export class BacklogService {
     commitMessage: string
   ): Promise<void> {
     try {
+      console.log(`Creating branch: ${branchName} in ${repoPath}`);
       // 新しいブランチを作成
       await execPromise(`cd ${repoPath} && git checkout -b ${branchName}`);
 
@@ -182,15 +211,18 @@ export class BacklogService {
 
         // ファイルを書き込み
         await writeFilePromise(filePath, file.content);
+        console.log(`Created file: ${file.path}`);
       }
 
       // 変更をステージングしてコミット
       await execPromise(
         `cd ${repoPath} && git add -A && git commit -m "${commitMessage}"`
       );
+      console.log(`Changes committed: ${commitMessage}`);
 
       // 変更をプッシュ
       await execPromise(`cd ${repoPath} && git push origin ${branchName}`);
+      console.log(`Branch pushed: ${branchName}`);
     } catch (error) {
       console.error("ブランチ作成・プッシュエラー:", error);
       throw new Error("ブランチの作成とプッシュに失敗しました");
@@ -209,6 +241,7 @@ export class BacklogService {
     let tempRepoDir = "";
 
     try {
+      console.log(`Submitting code changes for review #${reviewId}`);
       // レビュー情報を取得
       const reviewRepository = AppDataSource.getRepository(Review);
       const review = await reviewRepository.findOne({
@@ -309,16 +342,18 @@ ${latestSubmission.expectation || "なし"}
       if (tempRepoDir && fs.existsSync(tempRepoDir)) {
         try {
           await rmdirPromise(tempRepoDir, { recursive: true });
+          console.log(`Cleaned up temporary directory: ${tempRepoDir}`);
         } catch (rmError) {
           console.error("一時ディレクトリ削除エラー:", rmError);
         }
       }
     }
   }
+
   /**
    * 一時ディレクトリを削除する
    */
-  async cleanupTempDirectory(tempDir: string): Promise<void> {
+  async cleanupRepository(tempDir: string): Promise<void> {
     try {
       if (fs.existsSync(tempDir)) {
         await rmdirPromise(tempDir, { recursive: true });
@@ -339,6 +374,9 @@ ${latestSubmission.expectation || "なし"}
     statusFilters: "open" | "closed" | "merged" | "all" = "all"
   ): Promise<any[]> {
     try {
+      console.log(
+        `Fetching pull requests for ${projectIdOrKey}/${repoIdOrName} (status: ${statusFilters})`
+      );
       const params: any = {
         apiKey: this.apiKey,
       };
@@ -347,17 +385,13 @@ ${latestSubmission.expectation || "なし"}
       if (statusFilters !== "all") {
         params.statusId = [this.getPullRequestStatusId(statusFilters)];
       }
-      console.log(
-        `requestUrl: ${this.baseUrl}/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/pullRequests`
-      );
-      console.log(`params: ${JSON.stringify(params)}`);
 
       const response = await axios.get(
         `${this.baseUrl}/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/pullRequests`,
-        // `${this.baseUrl}/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/pullRequests/${params.statusId}`,
         { params }
       );
 
+      console.log(`Retrieved ${response.data.length} pull requests`);
       return response.data;
     } catch (error) {
       console.error("Backlog API - Pull requests fetch error:", error);
@@ -366,7 +400,7 @@ ${latestSubmission.expectation || "なし"}
   }
 
   /**
-   * Get pull request details by ID
+   * プルリクエスト詳細を取得
    */
   async getPullRequestById(
     projectIdOrKey: string,
@@ -374,10 +408,10 @@ ${latestSubmission.expectation || "なし"}
     pullRequestId: number
   ): Promise<any> {
     try {
-      console.log(`getPullRequestById is called`);
       console.log(
-        `requestUrl: ${this.baseUrl}/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/pullRequests/${pullRequestId}`
+        `Fetching PR #${pullRequestId} from ${projectIdOrKey}/${repoIdOrName}`
       );
+
       const response = await axios.get(
         `${this.baseUrl}/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/pullRequests/${pullRequestId}`,
         {
@@ -386,18 +420,21 @@ ${latestSubmission.expectation || "なし"}
           },
         }
       );
+
+      console.log(`Successfully retrieved PR #${pullRequestId}`);
       return response.data;
     } catch (error) {
-      console.error(
-        `Backlog API - Pull request #${pullRequestId} fetch error:`,
-        error
+      console.error(`Failed to fetch PR #${pullRequestId}:`, error);
+      throw new Error(
+        `Failed to fetch pull request #${pullRequestId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
       );
-      throw new Error(`Failed to fetch pull request #${pullRequestId}`);
     }
   }
 
   /**
-   * Get diff files for a pull request
+   * プルリクエストの差分を取得
    */
   async getPullRequestDiff(
     projectIdOrKey: string,
@@ -405,8 +442,19 @@ ${latestSubmission.expectation || "なし"}
     pullRequestId: number
   ): Promise<any> {
     try {
-      const response = await axios.get(
-        `${this.baseUrl}/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/pullRequests/${pullRequestId}/diff`,
+      console.log(`Getting diff for PR #${pullRequestId}`);
+
+      // 1. PR詳細を取得
+      const prDetails = await this.getPullRequestById(
+        projectIdOrKey,
+        repoIdOrName,
+        pullRequestId
+      );
+
+      // 2. コミット一覧を取得
+      console.log(`Fetching commits for PR #${pullRequestId}`);
+      const commitsResponse = await axios.get(
+        `${this.baseUrl}/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/pullRequests/${pullRequestId}/commits`,
         {
           params: {
             apiKey: this.apiKey,
@@ -414,10 +462,63 @@ ${latestSubmission.expectation || "なし"}
         }
       );
 
-      return response.data;
+      const commits = commitsResponse.data;
+      console.log(`Found ${commits.length} commits in PR #${pullRequestId}`);
+
+      // 3. 各コミットの差分を取得
+      let diffResults = [];
+
+      // 最大5コミットまで処理（パフォーマンス対策）
+      const commitsToProcess = commits.slice(0, Math.min(5, commits.length));
+
+      for (const commit of commitsToProcess) {
+        try {
+          console.log(`Fetching diff for commit ${commit.id}`);
+          const diffResponse = await axios.get(
+            `${this.baseUrl}/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/commits/${commit.id}/diffs`,
+            {
+              params: {
+                apiKey: this.apiKey,
+              },
+            }
+          );
+
+          diffResults.push({
+            commitId: commit.id,
+            message: commit.message,
+            diffs: diffResponse.data,
+          });
+        } catch (commitError) {
+          console.error(
+            `Error fetching diff for commit ${commit.id}:`,
+            commitError
+          );
+          // エラーがあっても続行
+        }
+      }
+
+      return {
+        pullRequest: prDetails,
+        commits: commits,
+        diffs: diffResults,
+      };
     } catch (error) {
-      console.error("Backlog API - Pull request diff fetch error:", error);
-      throw new Error("Failed to fetch pull request diff");
+      console.error(`Error fetching PR diff for #${pullRequestId}:`, error);
+      // エラー時はPR詳細情報のみを返す
+      try {
+        const prDetails = await this.getPullRequestById(
+          projectIdOrKey,
+          repoIdOrName,
+          pullRequestId
+        );
+        return { pullRequest: prDetails, commits: [], diffs: [] };
+      } catch (detailsError) {
+        throw new Error(
+          `Failed to fetch pull request diff: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      }
     }
   }
 
@@ -431,6 +532,9 @@ ${latestSubmission.expectation || "なし"}
     comment: string
   ): Promise<any> {
     try {
+      console.log(`Adding comment to PR #${pullRequestId}`);
+      console.log(`Comment length: ${comment.length} characters`);
+
       const response = await axios.post(
         `${this.baseUrl}/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/pullRequests/${pullRequestId}/comments`,
         {
@@ -443,25 +547,21 @@ ${latestSubmission.expectation || "なし"}
         }
       );
 
+      console.log(`Successfully added comment to PR #${pullRequestId}`);
       return response.data;
     } catch (error) {
-      console.error("Backlog API - プルリクエストコメント追加エラー:", error);
-      throw new Error("プルリクエストへのコメント追加に失敗しました");
-    }
-  }
+      console.error(`Error adding comment to PR #${pullRequestId}:`, error);
 
-  /**
-   * Clean up cloned repository directory
-   */
-  async cleanupRepository(repoPath: string): Promise<void> {
-    try {
-      if (fs.existsSync(repoPath)) {
-        await rmdirPromise(repoPath, { recursive: true });
-        console.log(`Cleaned up repository directory: ${repoPath}`);
+      if (axios.isAxiosError(error) && error.response) {
+        console.error(`Response status: ${error.response.status}`);
+        console.error(`Response data:`, error.response.data);
       }
-    } catch (error) {
-      console.error("Repository cleanup error:", error);
-      throw new Error("Failed to clean up repository directory");
+
+      throw new Error(
+        `Failed to add comment to PR #${pullRequestId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
     }
   }
 
