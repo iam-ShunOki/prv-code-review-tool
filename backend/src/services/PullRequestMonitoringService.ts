@@ -32,83 +32,89 @@ export class PullRequestMonitoringService {
 
     for (const project of projects) {
       console.log(`Checking project: ${project.projectKey}`);
-      const repositories = await this.backlogService.getRepositories(
-        project.projectKey
-      );
-
-      for (const repo of repositories) {
-        console.log(`Checking repository: ${repo.name}`);
-        // オープン状態のプルリクエストを取得
-        const pullRequests = await this.backlogService.getPullRequests(
-          project.projectKey,
-          repo.name,
-          "open"
+      if (project.projectKey == "CRUSH") {
+        const repositories = await this.backlogService.getRepositories(
+          project.projectKey
         );
 
-        console.log(
-          `Found ${pullRequests.length} open pull requests in ${repo.name}`
-        );
-
-        for (const pr of pullRequests) {
-          // すでに処理済みかチェック
-          const existing = await this.pullRequestTrackerRepository.findOne({
-            where: {
-              project_key: project.projectKey,
-              repository_name: repo.name,
-              pull_request_id: pr.id,
-            },
-          });
-
-          if (existing) {
-            console.log(`Skipping already processed PR #${pr.number}`);
-            skipped++;
-            continue;
-          }
-
-          // プルリクエストの詳細を取得
-          const prDetails = await this.backlogService.getPullRequestById(
+        for (const repo of repositories) {
+          console.log(`Checking repository: ${repo.name}`);
+          // オープン状態のプルリクエスト一覧を取得
+          const pullRequests = await this.backlogService.getPullRequests(
             project.projectKey,
             repo.name,
-            pr.id
+            "open"
           );
 
-          // @codereviewメンションをチェック
-          const hasMention =
-            this.mentionDetectionService.detectCodeReviewMention(
-              prDetails.description
-            );
+          console.log(
+            `Found ${pullRequests.length} open pull requests in ${repo.name}`
+          );
 
-          if (hasMention) {
-            console.log(`Processing PR #${pr.number} with @codereview mention`);
-            // コードレビューを作成
-            await this.automaticReviewCreator.createReviewFromPullRequest({
-              id: pr.id,
-              project: project.projectKey,
-              repository: repo.name,
-              number: pr.number,
-              summary: pr.summary,
-              description: prDetails.description,
-              base: pr.base,
-              branch: pr.branch,
-              authorId: pr.createdUser.id,
-              authorName: pr.createdUser.name,
-              authorMailAddress: pr.createdUser.mailAddress || null,
+          for (const pr of pullRequests) {
+            console.log(`${repo.name}のプルリクエストを処理中...`);
+            console.log(`target: ${JSON.stringify(pr)}`);
+            // すでに処理済みかチェック
+            const existing = await this.pullRequestTrackerRepository.findOne({
+              where: {
+                project_key: project.projectKey,
+                repository_name: repo.name,
+                pull_request_id: pr.number,
+              },
             });
 
-            // 処理済みとして記録
-            const tracker = new PullRequestTracker();
-            tracker.project_key = project.projectKey;
-            tracker.repository_name = repo.name;
-            tracker.pull_request_id = pr.id;
-            tracker.processed_at = new Date();
-            await this.pullRequestTrackerRepository.save(tracker);
+            if (existing) {
+              console.log(`Skipping already processed PR #${pr.number}`);
+              skipped++;
+              continue;
+            }
 
-            processed++;
-          } else {
-            console.log(
-              `Skipping PR #${pr.number} without @codereview mention`
+            // プルリクエストの詳細を取得
+            const prDetails = await this.backlogService.getPullRequestById(
+              project.projectKey,
+              repo.name,
+              pr.number
             );
-            skipped++;
+
+            // @codereviewメンションをチェック
+            const hasMention =
+              this.mentionDetectionService.detectCodeReviewMention(
+                prDetails.description
+              );
+
+            if (hasMention) {
+              console.log(
+                `Processing PR #${pr.number} with @codereview mention`
+              );
+              // コードレビューを作成
+              await this.automaticReviewCreator.createReviewFromPullRequest({
+                id: pr.id,
+                project: project.projectKey,
+                repository: repo.name,
+                number: pr.number,
+                summary: pr.summary,
+                description: prDetails.description,
+                base: pr.base,
+                branch: pr.branch,
+                authorId: pr.createdUser.id,
+                authorName: pr.createdUser.name,
+                authorMailAddress: pr.createdUser.mailAddress || null,
+              });
+
+              // 処理済みとして記録
+              const tracker = new PullRequestTracker();
+              tracker.project_key = project.projectKey;
+              tracker.repository_name = repo.name;
+              tracker.pull_request_id = pr.id;
+              tracker.processed_at = new Date();
+              await this.pullRequestTrackerRepository.save(tracker);
+
+              processed++;
+            } else {
+              console.log(
+                `Skipping PR #${pr.number} without @codereview mention`
+              );
+              skipped++;
+            }
           }
         }
       }

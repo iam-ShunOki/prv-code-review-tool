@@ -7,7 +7,7 @@ services:
       dockerfile: .devcontainer/Dockerfile
     volumes:
       - ..:/workspace:cached
-      - ~/.ssh:/home/node/.ssh:ro
+      - ~/.ssh:/root/.ssh:ro
     command: sleep infinity
     network_mode: service:mysql
     environment:
@@ -17,6 +17,7 @@ services:
       - MYSQL_DATABASE=codereview
       - CHROMA_HOST=chroma
       - NODE_ENV=development
+      
 
   mysql:
     image: mysql:8.0

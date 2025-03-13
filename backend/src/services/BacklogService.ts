@@ -49,6 +49,10 @@ export class BacklogService {
    */
   async getRepositories(projectIdOrKey: string): Promise<any[]> {
     try {
+      console.log(`apiKey: ${this.apiKey}`);
+      console.log(
+        `requestUrl: ${this.baseUrl}/projects/${projectIdOrKey}/git/repositories`
+      );
       const response = await axios.get(
         `${this.baseUrl}/projects/${projectIdOrKey}/git/repositories`,
         {
@@ -64,9 +68,6 @@ export class BacklogService {
     }
   }
 
-  /**
-   * リポジトリをクローン
-   */
   async cloneRepository(
     projectIdOrKey: string,
     repoIdOrName: string,
@@ -83,26 +84,41 @@ export class BacklogService {
         await mkdirPromise(this.tempDir, { recursive: true });
       }
 
-      // リポジトリをクローン
-      const gitUrl = `https://${this.spaceKey}.backlog.jp/git/${projectIdOrKey}/${repoIdOrName}.git`;
+      // APIキーを使用したGit URL（ユーザー名は何でも良い、パスワード部分にAPIキーを設定）
+      // const gitUrl = `https://apikey:${this.apiKey}@${this.spaceKey}.backlog.jp/git/${projectIdOrKey}/${repoIdOrName}.git`;
+      // const gitUrl = `https://${this.spaceKey}.backlog.jp/git/${projectIdOrKey}/${repoIdOrName}.git?apiKey=${this.apiKey}`;
+      // const gitUrl = `${this.spaceKey}@${this.spaceKey}.git.backlog.jp:/CRUSH/CRUSH.git?apiKey=${this.apiKey}`;
+      // const gitUrl = `${this.spaceKey}@${this.spaceKey}.backlog.jp:git/${projectIdOrKey}/${repoIdOrName}.git`;
+      const gitUrl = `${this.spaceKey}@${this.spaceKey}.git.backlog.jp:/${projectIdOrKey}/${repoIdOrName}.git`;
+      console.log(`gitUrl: ${gitUrl}`);
+
+      // クローンコマンドを実行
       const command = `git clone -b ${branch} ${gitUrl} ${tempRepoDir}`;
 
+      console.log(
+        `Cloning repository: ${projectIdOrKey}/${repoIdOrName} (${branch})`
+      );
+
+      // コマンドを実行（ログにAPIキーが出ないように注意）
       await execPromise(command);
+      console.log(`Repository cloned to ${tempRepoDir}`);
 
       return tempRepoDir;
     } catch (error) {
-      console.error("リポジトリクローンエラー:", error);
+      console.error("Repository clone error:", error);
 
       // エラー発生時は一時ディレクトリを削除
       if (fs.existsSync(tempRepoDir)) {
         try {
           await rmdirPromise(tempRepoDir, { recursive: true });
         } catch (rmError) {
-          console.error("一時ディレクトリ削除エラー:", rmError);
+          console.error("Temp directory cleanup error:", rmError);
         }
       }
 
-      throw new Error("リポジトリのクローンに失敗しました");
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to clone repository: ${errorMessage}`);
     }
   }
 
@@ -315,7 +331,7 @@ ${latestSubmission.expectation || "なし"}
   }
 
   /**
-   * Get pull requests for a repository
+   * プルリクエスト一覧を取得
    */
   async getPullRequests(
     projectIdOrKey: string,
@@ -329,11 +345,16 @@ ${latestSubmission.expectation || "なし"}
 
       // Filter by status if specified
       if (statusFilters !== "all") {
-        params.statusId = this.getPullRequestStatusId(statusFilters);
+        params.statusId = [this.getPullRequestStatusId(statusFilters)];
       }
+      console.log(
+        `requestUrl: ${this.baseUrl}/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/pullRequests`
+      );
+      console.log(`params: ${JSON.stringify(params)}`);
 
       const response = await axios.get(
         `${this.baseUrl}/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/pullRequests`,
+        // `${this.baseUrl}/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/pullRequests/${params.statusId}`,
         { params }
       );
 
@@ -353,6 +374,10 @@ ${latestSubmission.expectation || "なし"}
     pullRequestId: number
   ): Promise<any> {
     try {
+      console.log(`getPullRequestById is called`);
+      console.log(
+        `requestUrl: ${this.baseUrl}/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/pullRequests/${pullRequestId}`
+      );
       const response = await axios.get(
         `${this.baseUrl}/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/pullRequests/${pullRequestId}`,
         {

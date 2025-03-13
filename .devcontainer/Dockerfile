@@ -15,8 +15,11 @@ RUN npm install -g typescript ts-node nodemon
 
 WORKDIR /workspace
 
+
 # SSHディレクトリのセットアップ
 RUN mkdir -p /home/node/.ssh && chown -R node:node /home/node/.ssh && chmod 700 /home/node/.ssh
+# Add known hosts
+RUN touch /home/node/.ssh/known_hosts && chown node:node /home/node/.ssh/known_hosts && chmod 644 /home/node/.ssh/known_hosts
 
 # 環境変数の設定
 ENV NODE_ENV=development

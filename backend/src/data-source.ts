@@ -17,6 +17,7 @@ import { AddBacklogPrTracking1625000000600 } from "./migrations/1625000000600-Ad
 import dotenv from "dotenv";
 import { NotificationSettings } from "./models/NotificationSettings";
 import { BacklogRepository } from "./models/BacklogRepository";
+import { PullRequestTracker } from "./models/PullRequestTracker";
 
 // 環境変数の読み込み
 dotenv.config();
@@ -40,6 +41,7 @@ export const AppDataSource = new DataSource({
     Session,
     NotificationSettings,
     BacklogRepository,
+    PullRequestTracker,
   ],
   migrations: [
     InitialSchema1625000000000,
