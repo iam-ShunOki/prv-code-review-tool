@@ -522,6 +522,28 @@ ${latestSubmission.expectation || "なし"}
     }
   }
 
+  private sanitizeForBacklog(text: string): string {
+    if (!text) return "";
+
+    // Unicode絵文字をテキスト表現に置換
+    let sanitized = text
+      // 絵文字や特殊記号の置換
+      .replace(/[\u{1F300}-\u{1F9FF}]/gu, "") // すべての絵文字を除去
+      .replace(/🔴/g, "[重要]")
+      .replace(/🟠/g, "[注意]")
+      .replace(/🟡/g, "[注意]")
+      .replace(/🟢/g, "[改善]")
+      .replace(/[^\x00-\x7F]/g, function (char) {
+        // 非ASCII文字はそのまま保持するが、ここで問題があればエンコードも可能
+        return char;
+      });
+
+    // 連続した改行を最大2つに制限
+    sanitized = sanitized.replace(/\n{3,}/g, "\n\n");
+
+    return sanitized;
+  }
+
   /**
    * プルリクエストにコメントを追加
    */
@@ -533,12 +555,35 @@ ${latestSubmission.expectation || "なし"}
   ): Promise<any> {
     try {
       console.log(`Adding comment to PR #${pullRequestId}`);
-      console.log(`Comment length: ${comment.length} characters`);
+      console.log(
+        `Comment length before sanitization: ${comment.length} characters`
+      );
 
+      // コメントをサニタイズ
+      const sanitizedComment = this.sanitizeForBacklog(comment);
+      console.log(
+        `Comment length after sanitization: ${sanitizedComment.length} characters`
+      );
+
+      // コメントの長さをチェック - Backlogの制限は8000文字程度
+      const MAX_COMMENT_LENGTH = 8000;
+      if (sanitizedComment.length > MAX_COMMENT_LENGTH) {
+        console.log(
+          `Comment too long (${sanitizedComment.length} chars), splitting into multiple comments`
+        );
+        return await this.sendSplitComments(
+          projectIdOrKey,
+          repoIdOrName,
+          pullRequestId,
+          sanitizedComment
+        );
+      }
+
+      // 実際のAPIリクエスト
       const response = await axios.post(
         `${this.baseUrl}/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/pullRequests/${pullRequestId}/comments`,
         {
-          content: comment,
+          content: sanitizedComment,
         },
         {
           params: {
@@ -555,6 +600,65 @@ ${latestSubmission.expectation || "なし"}
       if (axios.isAxiosError(error) && error.response) {
         console.error(`Response status: ${error.response.status}`);
         console.error(`Response data:`, error.response.data);
+
+        // リクエストの詳細をログに出力（デバッグ用）
+        if (process.env.NODE_ENV === "development") {
+          const reqData = error.config?.data
+            ? JSON.parse(error.config.data)
+            : {};
+          console.error("Request data:", {
+            url: error.config?.url,
+            method: error.config?.method,
+            data: {
+              ...reqData,
+              content: reqData.content
+                ? `${reqData.content.substring(0, 100)}... (truncated)`
+                : undefined,
+            },
+          });
+        }
+      }
+
+      // APIレスポンスに特定のエラーコードがある場合は、より詳細な情報を提供
+      if (axios.isAxiosError(error) && error.response?.data?.errors) {
+        const apiErrors = error.response.data.errors;
+        console.error("API reported errors:", apiErrors);
+
+        // 特定のエラーに対する回避策
+        if (
+          apiErrors.some(
+            (e: any) => e.message && e.message.includes("Incorrect String")
+          )
+        ) {
+          console.error(
+            "Detected encoding/character issue. Attempting fallback with basic ASCII only"
+          );
+
+          try {
+            // 非ASCII文字を完全に除去した極めてシンプルなメッセージで再試行
+            const fallbackComment =
+              "## AIコードレビュー結果\n\n" +
+              "コードレビューが完了しました。詳細は管理画面を確認してください。\n\n" +
+              "注: 特殊文字の問題により、簡略化したメッセージを表示しています。";
+
+            const fallbackResponse = await axios.post(
+              `${this.baseUrl}/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/pullRequests/${pullRequestId}/comments`,
+              {
+                content: fallbackComment,
+              },
+              {
+                params: {
+                  apiKey: this.apiKey,
+                },
+              }
+            );
+
+            console.log("Successfully sent fallback comment");
+            return fallbackResponse.data;
+          } catch (fallbackError) {
+            console.error("Even fallback comment failed:", fallbackError);
+          }
+        }
       }
 
       throw new Error(
@@ -563,6 +667,85 @@ ${latestSubmission.expectation || "なし"}
         }`
       );
     }
+  }
+
+  /**
+   * 長いコメントを分割して送信（サニタイズ機能追加）
+   */
+  private async sendSplitComments(
+    projectIdOrKey: string,
+    repoIdOrName: string,
+    pullRequestId: number,
+    comment: string
+  ): Promise<any> {
+    const MAX_COMMENT_LENGTH = 7500; // 安全マージンを取る
+    const parts = [];
+
+    // コメントの分割ロジック
+    let remainingComment = comment;
+    let partNumber = 1;
+
+    while (remainingComment.length > 0) {
+      let partLength = Math.min(MAX_COMMENT_LENGTH, remainingComment.length);
+
+      // 文の途中で切らないように調整
+      if (partLength < remainingComment.length) {
+        // 改行やマークダウンのセクション区切りで分割するのが理想的
+        const lastNewline = remainingComment.lastIndexOf("\n\n", partLength);
+        const lastHeading = remainingComment.lastIndexOf("\n## ", partLength);
+        const lastBreakPoint = Math.max(lastNewline, lastHeading);
+
+        if (lastBreakPoint > partLength / 2) {
+          partLength = lastBreakPoint;
+        }
+      }
+
+      const part = remainingComment.substring(0, partLength);
+      const header = `## AIコードレビュー結果 (パート ${partNumber})\n\n`;
+      const footer =
+        partLength < remainingComment.length
+          ? "\n\n*コメントが長いため分割されています。次のコメントに続きます。*"
+          : "";
+
+      // サニタイズは既に行われているのでそのまま使用
+      parts.push(header + part + footer);
+      remainingComment = remainingComment.substring(partLength);
+      partNumber++;
+    }
+
+    console.log(`Split comment into ${parts.length} parts`);
+
+    // 各パートを順番に送信
+    const results = [];
+    for (let i = 0; i < parts.length; i++) {
+      try {
+        console.log(
+          `Sending part ${i + 1}/${parts.length} (${parts[i].length} chars)`
+        );
+        const result = await axios.post(
+          `${this.baseUrl}/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/pullRequests/${pullRequestId}/comments`,
+          {
+            content: parts[i],
+          },
+          {
+            params: {
+              apiKey: this.apiKey,
+            },
+          }
+        );
+        results.push(result.data);
+
+        // API制限を考慮して少し待機（連続リクエスト対策）
+        if (i < parts.length - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+      } catch (error) {
+        console.error(`Error sending comment part ${i + 1}:`, error);
+        throw error;
+      }
+    }
+
+    return results[0]; // 最初のコメントの結果を返す
   }
 
   /**

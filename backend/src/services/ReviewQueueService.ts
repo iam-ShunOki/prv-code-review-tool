@@ -3,6 +3,7 @@ import { AIService } from "./AIService";
 import { SubmissionService } from "./SubmissionService";
 import { CodeSubmission, SubmissionStatus } from "../models/CodeSubmission";
 import { AppDataSource } from "../index";
+import { ReviewFeedbackSenderService } from "./ReviewFeedbackSenderService"; // 追加
 
 interface QueueItem {
   submissionId: number;
@@ -14,6 +15,7 @@ export class ReviewQueueService {
   private static instance: ReviewQueueService;
   private aiService: AIService;
   private submissionService: SubmissionService;
+  private reviewFeedbackSenderService: ReviewFeedbackSenderService; // 追加
   private queue: QueueItem[] = []; // 処理待ちの項目
   private processingItems: Set<number> = new Set(); // 現在処理中の提出ID
   private isProcessing: boolean = false;
@@ -23,6 +25,7 @@ export class ReviewQueueService {
   private constructor() {
     this.aiService = new AIService();
     this.submissionService = new SubmissionService();
+    this.reviewFeedbackSenderService = new ReviewFeedbackSenderService(); // 追加
   }
 
   /**
@@ -162,6 +165,45 @@ export class ReviewQueueService {
           // AIレビューを実行
           await this.aiService.reviewCode(submission);
           console.log(`Review completed for submission ${submissionId}`);
+
+          // 追加: レビュー結果をBacklogに送信
+          try {
+            // レビューIDを取得
+            const review = await this.submissionService.getReviewBySubmissionId(
+              submission.id
+            );
+
+            if (review && review.backlog_pr_id) {
+              console.log(
+                `Sending feedback to Backlog PR for review #${review.id}`
+              );
+              const result =
+                await this.reviewFeedbackSenderService.sendReviewFeedbackToPullRequest(
+                  review.id
+                );
+
+              if (result) {
+                console.log(
+                  `Successfully sent feedback to Backlog PR for review #${review.id}`
+                );
+              } else {
+                console.log(
+                  `Failed to send feedback to Backlog PR for review #${review.id}`
+                );
+              }
+            } else {
+              console.log(
+                `Review #${review?.id} is not associated with a Backlog PR or not found`
+              );
+            }
+          } catch (feedbackError) {
+            console.error(
+              `Error sending feedback to Backlog for submission ${submissionId}:`,
+              feedbackError
+            );
+            // フィードバック送信エラーの場合でも処理を続行（定期ジョブで再試行される）
+          }
+
           this.queue.shift(); // キューから削除
         }
       }

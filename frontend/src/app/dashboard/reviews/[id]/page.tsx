@@ -26,6 +26,7 @@ import {
   ChevronDown,
   GitPullRequest,
 } from "lucide-react";
+import ReviewAIChat from "@/components/ai/ReviewAIChat";
 
 // Monaco Editor をクライアントサイドのみでロード
 const MonacoEditor = dynamic(() => import("react-monaco-editor"), {
@@ -475,6 +476,25 @@ export default function ReviewDetailPage({
           )}
         </CardFooter>
       </Card>
+      {/* AIチャットボットを追加 */}
+      {!isLoading && review && (
+        <ReviewAIChat
+          reviewId={parseInt(params.id)}
+          reviewTitle={review.title}
+          codeContent={
+            review.submissions && review.submissions.length > 0
+              ? review.submissions[0].code_content
+              : undefined
+          }
+          feedbacks={
+            review.submissions &&
+            review.submissions.length > 0 &&
+            review.submissions[0].feedbacks
+              ? review.submissions[0].feedbacks
+              : undefined
+          }
+        />
+      )}
     </div>
   );
 }

@@ -131,6 +131,7 @@ import feedbackRoutes from "./routes/feedbackRoutes";
 import adminRepositoryRoutes from "./routes/adminRepositoryRoutes";
 import webhookRoutes from "./routes/webhookRoutes";
 import repositoryWhitelistRoutes from "./routes/repositoryWhitelistRoutes";
+import aiChatRoutes from "./routes/aiChatRoutes";
 
 // ルートの登録
 app.use("/api/auth", authRoutes);
@@ -146,6 +147,7 @@ app.use("/api/feedback", feedbackRoutes);
 app.use("/api/admin/repositories", adminRepositoryRoutes);
 app.use("/api/webhooks", webhookRoutes);
 app.use("/api/admin/repository-whitelist", repositoryWhitelistRoutes);
+app.use("/api/ai-chat", aiChatRoutes);
 
 // エラーハンドリング強化
 app.use(

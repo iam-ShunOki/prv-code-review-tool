@@ -346,11 +346,9 @@ export class ReviewFeedbackSenderService {
   ): string {
     let markdown = "## AIコードレビュー結果\n\n";
 
-    // レビュー情報を追加
-    markdown += `### レビュー情報\n\n`;
+    // レビュー情報を追加（簡潔に）
+    markdown += `### レビュー情報\n`;
     markdown += `- PR: #${review.backlog_pr_id}\n`;
-    markdown += `- プロジェクト: ${review.backlog_project}\n`;
-    markdown += `- リポジトリ: ${review.backlog_repository}\n`;
     markdown += `- レビュー日時: ${new Date().toLocaleString("ja-JP")}\n\n`;
 
     // フィードバックがなければその旨を表示
@@ -379,25 +377,25 @@ export class ReviewFeedbackSenderService {
     markdown += `- 低優先度の問題: ${lowPriority.length}件\n`;
     markdown += `- 合計: ${feedbacks.length}件\n\n`;
 
-    // 高優先度のフィードバック
+    // 高優先度のフィードバック - 絵文字を使わない
     if (highPriority.length > 0) {
-      markdown += "### 🔴 高優先度の問題\n\n";
+      markdown += "### [重要] 高優先度の問題\n\n";
       highPriority.forEach((feedback, index) => {
         markdown += this.formatSingleFeedback(feedback, index + 1);
       });
     }
 
-    // 中優先度のフィードバック
+    // 中優先度のフィードバック - 絵文字を使わない
     if (mediumPriority.length > 0) {
-      markdown += "### 🟠 中優先度の問題\n\n";
+      markdown += "### [注意] 中優先度の問題\n\n";
       mediumPriority.forEach((feedback, index) => {
         markdown += this.formatSingleFeedback(feedback, index + 1);
       });
     }
 
-    // 低優先度のフィードバック
+    // 低優先度のフィードバック - 絵文字を使わない
     if (lowPriority.length > 0) {
-      markdown += "### 🟢 低優先度の問題\n\n";
+      markdown += "### [改善] 低優先度の問題\n\n";
       lowPriority.forEach((feedback, index) => {
         markdown += this.formatSingleFeedback(feedback, index + 1);
       });
@@ -405,8 +403,7 @@ export class ReviewFeedbackSenderService {
 
     // フッター
     markdown += "\n---\n";
-    markdown +=
-      "このレビューはAIによって自動生成されました。質問や疑問点があれば、コメントしてください。";
+    markdown += "このレビューはAIによって自動生成されました。";
 
     return markdown;
   }
@@ -421,7 +418,6 @@ export class ReviewFeedbackSenderService {
       result += `**該当行**: ${feedback.line_number}行目\n\n`;
     }
 
-    result += `**問題点**: ${feedback.problem_point}\n\n`;
     result += `**提案**: ${feedback.suggestion}\n\n`;
 
     return result;
