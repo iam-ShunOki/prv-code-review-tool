@@ -214,6 +214,79 @@ export class AnalyticsService {
   }
 
   /**
+   * 新入社員ランキングを取得
+   */
+  async getTraineeRanking(
+    joinYear?: number,
+    limit: number = 10
+  ): Promise<any[]> {
+    // ユーザーリポジトリとスコアを計算するためのリポジトリ
+    const userRepository = AppDataSource.getRepository(User);
+    const evaluationRepository = AppDataSource.getRepository(Evaluation);
+
+    // クエリビルダーを作成
+    let query = userRepository
+      .createQueryBuilder("user")
+      .where("user.role = :role", { role: "trainee" })
+      .leftJoinAndSelect(
+        "user.evaluations",
+        "evaluation",
+        "evaluation.user_id = user.id"
+      );
+
+    // 入社年度でフィルタリング
+    if (joinYear) {
+      query = query.andWhere("user.join_year = :joinYear", { joinYear });
+    }
+
+    // 結果を取得
+    const users = await query.getMany();
+
+    // 各ユーザーの評価スコアを計算
+    const rankingData = await Promise.all(
+      users.map(async (user) => {
+        // 最新の評価を取得
+        const latestEvaluation = await evaluationRepository.findOne({
+          where: { user_id: user.id },
+          order: { created_at: "DESC" },
+        });
+
+        // 平均スコアを計算
+        let averageScore = 0;
+        let skillLevel = "N/A";
+
+        if (latestEvaluation) {
+          const scores = [
+            latestEvaluation.code_quality_score,
+            latestEvaluation.readability_score,
+            latestEvaluation.efficiency_score,
+            latestEvaluation.best_practices_score,
+          ];
+          averageScore =
+            scores.reduce((sum, score) => sum + score, 0) / scores.length;
+          skillLevel = latestEvaluation.overall_level;
+        }
+
+        // パスワードを除外
+        const { password, ...userWithoutPassword } = user;
+
+        return {
+          ...userWithoutPassword,
+          averageScore,
+          skillLevel,
+        };
+      })
+    );
+
+    // スコアでソート
+    const sortedRanking = rankingData
+      .sort((a, b) => b.averageScore - a.averageScore)
+      .slice(0, limit);
+
+    return sortedRanking;
+  }
+
+  /**
    * モックデータ: スキルレベル分布
    */
   private getMockSkillDistribution(): any {

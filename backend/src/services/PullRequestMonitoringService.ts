@@ -44,7 +44,7 @@ export class PullRequestMonitoringService {
 
         try {
           // 特定のプロジェクトのみ処理する
-          if (project.projectKey == "CRUSH") {
+          if (project.projectKey == "AD_TECHNOLOGY") {
             const repositories = await this.backlogService.getRepositories(
               project.projectKey
             );
@@ -100,6 +100,12 @@ export class PullRequestMonitoringService {
                         repo.name,
                         pr.number
                       );
+
+                    // PR詳細をログに出力
+                    console.log(
+                      `PR #${pr.number} details:`,
+                      JSON.stringify(prDetails, null, 2)
+                    );
 
                     // @codereviewメンションをチェック
                     const hasMention =

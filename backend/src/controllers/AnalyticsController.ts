@@ -174,4 +174,34 @@ export class AnalyticsController {
       });
     }
   };
+
+  /**
+   * 新入社員ランキングを取得
+   */
+  getTraineeRanking = async (req: Request, res: Response): Promise<void> => {
+    try {
+      // クエリパラメータからフィルタリング条件を取得
+      const joinYear = req.query.joinYear
+        ? parseInt(req.query.joinYear as string)
+        : undefined;
+      const limit = req.query.limit ? parseInt(req.query.limit as string) : 10; // デフォルトは10名
+
+      // ランキングデータを取得
+      const ranking = await this.analyticsService.getTraineeRanking(
+        joinYear,
+        limit
+      );
+
+      res.status(200).json({
+        success: true,
+        data: ranking,
+      });
+    } catch (error) {
+      console.error("ランキングデータ取得エラー:", error);
+      res.status(500).json({
+        success: false,
+        message: "ランキングデータの取得中にエラーが発生しました",
+      });
+    }
+  };
 }

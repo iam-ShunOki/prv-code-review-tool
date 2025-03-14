@@ -95,10 +95,12 @@ export class BacklogService {
   /**
    * Backlogのリポジトリをクローン
    */
+  // Update cloneRepository method to support shallow clones for efficiency
   async cloneRepository(
     projectIdOrKey: string,
     repoIdOrName: string,
-    branch: string = "master"
+    branch: string = "master",
+    shallow: boolean = false
   ): Promise<string> {
     const tempRepoDir = path.join(
       this.tempDir,
@@ -106,17 +108,16 @@ export class BacklogService {
     );
 
     try {
-      // 一時ディレクトリが存在しない場合は作成
-      if (!fs.existsSync(this.tempDir)) {
-        await mkdirPromise(this.tempDir, { recursive: true });
-      }
+      // Create temp directory if it doesn't exist
+      await mkdirPromise(tempRepoDir, { recursive: true });
 
-      // Backlogドキュメントに準拠したSSH URLの構築
+      // Backlog git repository access info
       const gitUrl = `${this.spaceKey}@${this.spaceKey}.git.backlog.jp:/${projectIdOrKey}/${repoIdOrName}.git`;
       console.log(`Using SSH git URL: ${gitUrl}`);
 
-      // クローンコマンドを実行
-      const command = `git clone -b ${branch} ${gitUrl} ${tempRepoDir}`;
+      // Clone command with optional shallow flag
+      const depthFlag = shallow ? "--depth 1" : "";
+      const command = `git clone ${depthFlag} -b ${branch} ${gitUrl} ${tempRepoDir}`;
       console.log(`Executing clone command: ${command}`);
       const { stdout, stderr } = await execPromise(command);
 
@@ -124,14 +125,13 @@ export class BacklogService {
         console.warn(`Clone warning: ${stderr}`);
       }
 
-      console.log(`Clone stdout: ${stdout}`);
       console.log(`Repository cloned to ${tempRepoDir}`);
 
       return tempRepoDir;
     } catch (error) {
       console.error("Repository clone error:", error);
 
-      // エラー発生時は一時ディレクトリを削除
+      // Clean up on error
       if (fs.existsSync(tempRepoDir)) {
         try {
           await rmdirPromise(tempRepoDir, { recursive: true });
@@ -277,7 +277,8 @@ export class BacklogService {
       tempRepoDir = await this.cloneRepository(
         projectIdOrKey,
         repoIdOrName,
-        baseBranch
+        baseBranch,
+        true
       );
 
       // ブランチ名を生成（ユーザー名_reviewId_タイムスタンプ）
@@ -434,7 +435,7 @@ ${latestSubmission.expectation || "なし"}
   }
 
   /**
-   * プルリクエストの差分を取得
+   * プルリクエストの差分を取得（改善版）
    */
   async getPullRequestDiff(
     projectIdOrKey: string,
@@ -444,81 +445,210 @@ ${latestSubmission.expectation || "なし"}
     try {
       console.log(`Getting diff for PR #${pullRequestId}`);
 
-      // 1. PR詳細を取得
+      // 1. Get PR details
       const prDetails = await this.getPullRequestById(
         projectIdOrKey,
         repoIdOrName,
         pullRequestId
       );
 
-      // 2. コミット一覧を取得
-      console.log(`Fetching commits for PR #${pullRequestId}`);
-      const commitsResponse = await axios.get(
-        `${this.baseUrl}/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/pullRequests/${pullRequestId}/commits`,
-        {
-          params: {
-            apiKey: this.apiKey,
-          },
-        }
+      const baseBranch = prDetails.base;
+      const headBranch = prDetails.branch;
+
+      console.log(
+        `PR #${pullRequestId} - Base: ${baseBranch}, Head: ${headBranch}`
       );
 
-      const commits = commitsResponse.data;
-      console.log(`Found ${commits.length} commits in PR #${pullRequestId}`);
+      // 2. Use git directly for diff
+      let tempRepoDir = "";
+      try {
+        // Clone base branch repository
+        tempRepoDir = await this.cloneRepository(
+          projectIdOrKey,
+          repoIdOrName,
+          baseBranch,
+          false
+        );
 
-      // 3. 各コミットの差分を取得
-      let diffResults = [];
+        // Fetch all branches
+        console.log(`Fetching all remote branches for PR #${pullRequestId}`);
+        await execPromise(`cd ${tempRepoDir} && git fetch --all`);
 
-      // 最大5コミットまで処理（パフォーマンス対策）
-      const commitsToProcess = commits.slice(0, Math.min(5, commits.length));
+        // Verify branches exist
+        const { stdout: branchList } = await execPromise(
+          `cd ${tempRepoDir} && git branch -r`
+        );
+        console.log(`Available remote branches: ${branchList}`);
 
-      for (const commit of commitsToProcess) {
-        try {
-          console.log(`Fetching diff for commit ${commit.id}`);
-          const diffResponse = await axios.get(
-            `${this.baseUrl}/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/commits/${commit.id}/diffs`,
-            {
-              params: {
-                apiKey: this.apiKey,
-              },
-            }
+        const remoteHeadBranch = `origin/${headBranch}`;
+        const remoteBaseBranch = `origin/${baseBranch}`;
+
+        if (!branchList.includes(remoteHeadBranch.trim())) {
+          console.warn(
+            `Head branch ${remoteHeadBranch} not found. Available branches: ${branchList}`
           );
+          throw new Error(`Head branch ${headBranch} not found in repository`);
+        }
 
-          diffResults.push({
-            commitId: commit.id,
-            message: commit.message,
-            diffs: diffResponse.data,
+        if (!branchList.includes(remoteBaseBranch.trim())) {
+          console.warn(
+            `Base branch ${remoteBaseBranch} not found. Available branches: ${branchList}`
+          );
+          throw new Error(`Base branch ${baseBranch} not found in repository`);
+        }
+
+        // 3. Get name-status to properly identify added/modified/deleted files
+        console.log(`Getting file status for PR #${pullRequestId}`);
+        const { stdout: nameStatusOutput } = await execPromise(
+          `cd ${tempRepoDir} && git diff --name-status ${remoteBaseBranch} ${remoteHeadBranch}`
+        );
+
+        // Parse name-status output
+        const fileStatuses = nameStatusOutput
+          .trim()
+          .split("\n")
+          .filter((line) => line.length > 0)
+          .map((line) => {
+            const [statusCode, ...pathParts] = line.split("\t");
+            const filePath = pathParts.join("\t"); // Handle paths with tabs
+            let status;
+
+            // Map git status codes to our status values
+            if (statusCode.startsWith("A")) status = "added";
+            else if (statusCode.startsWith("M")) status = "modified";
+            else if (statusCode.startsWith("D")) status = "deleted";
+            else if (statusCode.startsWith("R")) status = "renamed";
+            else status = "unknown";
+
+            return { filePath, status, statusCode };
           });
-        } catch (commitError) {
-          console.error(
-            `Error fetching diff for commit ${commit.id}:`,
-            commitError
-          );
-          // エラーがあっても続行
+
+        console.log(`Changed files: ${fileStatuses.length}`);
+
+        // 4. Checkout head branch to access all files including new ones
+        console.log(`Checking out head branch: ${remoteHeadBranch}`);
+        await execPromise(
+          `cd ${tempRepoDir} && git checkout ${remoteHeadBranch}`
+        );
+
+        // 5. Get file details
+        const fileDetails = [];
+        for (const fileStatus of fileStatuses) {
+          try {
+            // Skip invalid entries
+            if (!fileStatus.filePath) continue;
+
+            let fileDiff = null;
+            let fileContent = null;
+
+            // Process based on file status
+            if (fileStatus.status === "deleted") {
+              // For deleted files, get the diff but not content
+              fileDiff = await this.safeExec(
+                `cd ${tempRepoDir} && git diff ${remoteBaseBranch} ${remoteHeadBranch} -- "${fileStatus.filePath}"`
+              );
+            } else {
+              // For added/modified files, get both diff and content
+              fileDiff = await this.safeExec(
+                `cd ${tempRepoDir} && git diff ${remoteBaseBranch} ${remoteHeadBranch} -- "${fileStatus.filePath}"`
+              );
+
+              // Get content from head branch (safe even for new files)
+              fileContent = await this.safeExec(
+                `cd ${tempRepoDir} && cat "${fileStatus.filePath}"`
+              );
+            }
+
+            fileDetails.push({
+              filePath: fileStatus.filePath,
+              status: fileStatus.status,
+              diff: fileDiff,
+              content: fileContent,
+              statusCode: fileStatus.statusCode,
+            });
+          } catch (fileError) {
+            console.error(
+              `Error processing file: ${fileStatus.filePath}`,
+              fileError
+            );
+            fileDetails.push({
+              filePath: fileStatus.filePath,
+              status: fileStatus.status,
+              diff: null,
+              content: null,
+              error:
+                fileError instanceof Error
+                  ? fileError.message
+                  : String(fileError),
+            });
+          }
+        }
+
+        return {
+          pullRequest: prDetails,
+          changedFiles: fileDetails,
+          baseCommit: remoteBaseBranch,
+          headCommit: remoteHeadBranch,
+        };
+      } catch (error) {
+        console.error(`Error processing PR #${pullRequestId}:`, error);
+        if (error instanceof Error) {
+          console.error(`  Details: ${error.message}`);
+          if ("stdout" in error)
+            console.error(`  stdout: ${(error as any).stdout}`);
+          if ("stderr" in error)
+            console.error(`  stderr: ${(error as any).stderr}`);
+        }
+
+        throw error;
+      } finally {
+        // Clean up
+        if (tempRepoDir && fs.existsSync(tempRepoDir)) {
+          try {
+            await this.cleanupRepository(tempRepoDir);
+          } catch (cleanupError) {
+            console.error(
+              `Error cleaning up repo: ${tempRepoDir}`,
+              cleanupError
+            );
+          }
         }
       }
-
-      return {
-        pullRequest: prDetails,
-        commits: commits,
-        diffs: diffResults,
-      };
     } catch (error) {
       console.error(`Error fetching PR diff for #${pullRequestId}:`, error);
-      // エラー時はPR詳細情報のみを返す
+
+      // Fallback
       try {
         const prDetails = await this.getPullRequestById(
           projectIdOrKey,
           repoIdOrName,
           pullRequestId
         );
-        return { pullRequest: prDetails, commits: [], diffs: [] };
-      } catch (detailsError) {
+        return {
+          pullRequest: prDetails,
+          changedFiles: [],
+          error: `Failed to fetch detailed diff: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        };
+      } catch (fallbackError) {
         throw new Error(
           `Failed to fetch pull request diff: ${
             error instanceof Error ? error.message : String(error)
           }`
         );
       }
+    }
+  }
+
+  // 安全にコマンドを実行するヘルパーメソッド
+  private async safeExec(command: string): Promise<string> {
+    try {
+      const { stdout } = await execPromise(command);
+      return stdout;
+    } catch (error) {
+      console.error(`Command failed: ${command}`, error);
+      return "";
     }
   }
 

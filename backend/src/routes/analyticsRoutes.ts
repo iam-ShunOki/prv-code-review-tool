@@ -27,4 +27,7 @@ router.get("/employee/:id", analyticsController.getEmployeeAnalytics);
 // 分析レポートをエクスポート
 router.get("/export", analyticsController.exportAnalyticsData);
 
+// 新入社員ランキングを取得
+router.get("/trainee-ranking", analyticsController.getTraineeRanking);
+
 export default router;

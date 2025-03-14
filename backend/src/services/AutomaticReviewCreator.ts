@@ -302,18 +302,26 @@ export class AutomaticReviewCreator {
   }
 
   /**
-   * 差分データからコード内容を抽出
+   * 差分データからコード内容を抽出（改善版）
    */
   private extractCodeFromDiff(diffData: any): string {
     console.log("Extracting code from diff data");
 
+    // デバッグ情報を追加
+    console.log(`Diff data type: ${typeof diffData}`);
+    if (typeof diffData === "object") {
+      console.log(`Diff data keys: ${Object.keys(diffData).join(", ")}`);
+    }
+
     // すでに文字列の場合はそのまま返す
     if (typeof diffData === "string") {
+      console.log(`Received string diff data (${diffData.length} chars)`);
       return diffData;
     }
 
-    // diff情報を保持する文字列
+    // 差分情報を保持する文字列
     let extractedCode = "";
+    let debugging = "";
 
     try {
       // PR情報を取得
@@ -322,11 +330,13 @@ export class AutomaticReviewCreator {
         extractedCode += `// Pull Request #${pr.number}: ${pr.summary}\n`;
         extractedCode += `// Branch: ${pr.branch}\n`;
         extractedCode += `// Base: ${pr.base}\n\n`;
+        debugging += `Found PR info: #${pr.number}\n`;
       }
 
       // コミット情報を処理
       if (diffData.commits && Array.isArray(diffData.commits)) {
         extractedCode += `// Changes from ${diffData.commits.length} commits\n\n`;
+        debugging += `Found ${diffData.commits.length} commits\n`;
 
         // 最大5件のコミットメッセージを表示
         diffData.commits
@@ -337,88 +347,76 @@ export class AutomaticReviewCreator {
         extractedCode += "\n";
       }
 
-      // 差分情報を処理
-      if (diffData.diffs && Array.isArray(diffData.diffs)) {
+      // diffData.diffsがなく、直接diffsが配列として渡されることもある
+      const diffsToProcess = Array.isArray(diffData)
+        ? diffData
+        : diffData.diffs && Array.isArray(diffData.diffs)
+        ? diffData.diffs
+        : null;
+
+      // CASE 1: ルート階層に直接diffs配列がある場合
+      if (Array.isArray(diffData)) {
+        debugging += `Processing array of diffs (${diffData.length} items)\n`;
+        for (const diff of diffData) {
+          if (typeof diff === "object" && diff !== null) {
+            // ファイル情報の追加
+            if (diff.path) {
+              extractedCode += `\n// File: ${diff.path}\n`;
+              debugging += `Found file: ${diff.path}\n`;
+            }
+
+            // hunksの処理
+            if (diff.hunks && Array.isArray(diff.hunks)) {
+              debugging += `Found ${diff.hunks.length} hunks\n`;
+              for (const hunk of diff.hunks) {
+                if (hunk.content) {
+                  extractedCode += hunk.content + "\n";
+                  debugging += `Added hunk content (${hunk.content.length} chars)\n`;
+                } else if (hunk.lines && Array.isArray(hunk.lines)) {
+                  for (const line of hunk.lines) {
+                    extractedCode += line + "\n";
+                  }
+                  debugging += `Added ${hunk.lines.length} lines from hunk\n`;
+                }
+              }
+            }
+          }
+        }
+      }
+      // CASE 2: diffData.diffs配列がある場合
+      else if (diffData.diffs && Array.isArray(diffData.diffs)) {
+        debugging += `Processing diffData.diffs (${diffData.diffs.length} items)\n`;
+
         for (const commitDiff of diffData.diffs) {
           if (commitDiff.diffs && Array.isArray(commitDiff.diffs)) {
             for (const fileDiff of commitDiff.diffs) {
-              extractedCode += `// File: ${fileDiff.path || "unknown"}\n`;
+              if (fileDiff.path) {
+                extractedCode += `\n// File: ${fileDiff.path}\n`;
+                debugging += `Found file: ${fileDiff.path}\n`;
+              }
 
               if (fileDiff.hunks && Array.isArray(fileDiff.hunks)) {
+                debugging += `Found ${fileDiff.hunks.length} hunks\n`;
                 for (const hunk of fileDiff.hunks) {
                   if (hunk.content) {
                     extractedCode += hunk.content + "\n";
+                    debugging += `Added hunk content (${hunk.content.length} chars)\n`;
+                  } else if (hunk.lines && Array.isArray(hunk.lines)) {
+                    for (const line of hunk.lines) {
+                      extractedCode += line + "\n";
+                    }
+                    debugging += `Added ${hunk.lines.length} lines from hunk\n`;
                   }
                 }
-              } else {
-                extractedCode += JSON.stringify(fileDiff, null, 2) + "\n";
               }
-
-              extractedCode += "\n";
             }
           }
         }
       }
 
-      // 配列の場合（ファイル毎の差分の場合）
-      if (Array.isArray(diffData)) {
-        console.log(`Processing diff data with ${diffData.length} entries`);
-
-        diffData.forEach((item, index) => {
-          if (typeof item === "string") {
-            // 文字列の場合はそのまま追加
-            extractedCode += item + "\n\n";
-          } else if (typeof item === "object" && item !== null) {
-            // オブジェクトの場合は構造に基づいて処理
-            extractedCode += `=== ファイル ${index + 1} ===\n`;
-
-            // ファイルパス情報があれば追加
-            if (item.path) {
-              extractedCode += `ファイル: ${item.path}\n`;
-            }
-
-            // 差分の種類があれば追加
-            if (item.type) {
-              extractedCode += `変更タイプ: ${item.type}\n`;
-            }
-
-            // ハンク（変更箇所）の処理
-            if (item.hunks && Array.isArray(item.hunks)) {
-              item.hunks.forEach(
-                (
-                  hunk: { content: string; lines: any[] },
-                  hunkIndex: number
-                ) => {
-                  extractedCode += `\n--- 変更箇所 ${hunkIndex + 1} ---\n`;
-                  if (hunk.content) {
-                    extractedCode += hunk.content + "\n";
-                  } else if (hunk.lines && Array.isArray(hunk.lines)) {
-                    hunk.lines.forEach((line) => {
-                      extractedCode += line + "\n";
-                    });
-                  }
-                }
-              );
-            }
-
-            // コンテンツが直接含まれている場合
-            if (item.content) {
-              extractedCode += item.content + "\n";
-            }
-
-            // 上記に該当しない場合は、JSONとして追加
-            if (!item.path && !item.hunks && !item.content) {
-              extractedCode += JSON.stringify(item, null, 2) + "\n";
-            }
-
-            extractedCode += "\n";
-          }
-        });
-      }
-
       // 内容がない場合のフォールバック
       if (!extractedCode || extractedCode.trim() === "") {
-        extractedCode = `// No code content could be extracted from the pull request diff.\n`;
+        extractedCode = `// Could not extract code content from the pull request diff.\n`;
         extractedCode += `// This might be because the PR doesn't have any code changes, or due to API limitations.\n`;
 
         if (diffData.pullRequest) {
@@ -426,6 +424,40 @@ export class AutomaticReviewCreator {
           extractedCode += `// PR Description: ${
             diffData.pullRequest.description || "No description"
           }\n`;
+        }
+
+        // JSONダンプを追加してデバッグに役立てる
+        extractedCode += "\n// DEBUG INFO START\n";
+        extractedCode += "// " + debugging.replace(/\n/g, "\n// ");
+        try {
+          const diffStr = JSON.stringify(diffData).substring(0, 1000);
+          extractedCode += `\n// Diff data (truncated): ${diffStr}...\n`;
+        } catch (e) {
+          extractedCode += "\n// Could not stringify diff data\n";
+        }
+        extractedCode += "// DEBUG INFO END\n";
+      }
+
+      // ローカルデバッグ用のファイル出力（開発環境のみ）
+      if (process.env.NODE_ENV === "development") {
+        try {
+          const fs = require("fs");
+          const path = require("path");
+          const debugDir = path.join(__dirname, "../../temp/debug");
+
+          if (!fs.existsSync(debugDir)) {
+            fs.mkdirSync(debugDir, { recursive: true });
+          }
+
+          const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+          fs.writeFileSync(
+            path.join(debugDir, `extracted-code-${timestamp}.txt`),
+            extractedCode
+          );
+
+          console.log(`Saved extracted code to debug file for inspection`);
+        } catch (e) {
+          console.error("Error saving debug file:", e);
         }
       }
     } catch (error) {
@@ -440,6 +472,15 @@ export class AutomaticReviewCreator {
     }
 
     console.log(`Extracted code length: ${extractedCode.length} characters`);
+
+    // 抽出したコードの一部をログに出力
+    const previewLength = Math.min(200, extractedCode.length);
+    console.log(
+      `Extracted code preview: ${extractedCode.substring(0, previewLength)}${
+        extractedCode.length > previewLength ? "..." : ""
+      }`
+    );
+
     return extractedCode;
   }
 }
