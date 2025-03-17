@@ -19,6 +19,10 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { AlertCircle } from "lucide-react";
+import { useUsageLimit } from "@/contexts/UsageLimitContext";
+import { UsageLimitBadge } from "@/components/usage/UsageLimitBadge";
 
 // Monaco Editor をクライアントサイドのみでロード
 const MonacoEditor = dynamic(() => import("react-monaco-editor"), {
@@ -40,6 +44,15 @@ export default function NewReviewPage() {
   const { user, token } = useAuth();
   const router = useRouter();
   const { toast } = useToast();
+  const { canUseFeature, getRemainingUsage, refreshUsageLimits } =
+    useUsageLimit();
+
+  // 管理者かどうかを判定
+  const isAdmin = user?.role === "admin";
+
+  // コードレビュー機能が利用可能かどうか
+  const canUseCodeReview = canUseFeature("code_review");
+  const remainingReviews = getRemainingUsage("code_review");
 
   const {
     register,
@@ -59,6 +72,17 @@ export default function NewReviewPage() {
       toast({
         title: "コードが必要です",
         description: "レビュー対象のコードを入力してください",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // 管理者でなく、利用制限に達している場合は処理を中止
+    if (!isAdmin && !canUseCodeReview) {
+      toast({
+        title: "利用制限に達しました",
+        description:
+          "本日のAIコードレビュー回数制限に達しました。明日以降に再度お試しください。",
         variant: "destructive",
       });
       return;
@@ -110,6 +134,9 @@ export default function NewReviewPage() {
         throw new Error("コード提出に失敗しました");
       }
 
+      // 利用状況を更新
+      await refreshUsageLimits();
+
       toast({
         title: "コードレビュー依頼を送信しました",
         description: "AIによるレビュー結果をお待ちください",
@@ -146,11 +173,29 @@ export default function NewReviewPage() {
   return (
     <div className="space-y-8">
       <header>
-        <h1 className="text-3xl font-bold">新規コードレビュー依頼</h1>
+        <div className="flex items-center justify-between">
+          <h1 className="text-3xl font-bold">新規コードレビュー依頼</h1>
+          {!isAdmin && (
+            <div className="flex items-center bg-blue-50 px-3 py-1.5 rounded-md">
+              <UsageLimitBadge featureKey="code_review" showLabel />
+            </div>
+          )}
+        </div>
         <p className="text-gray-500 mt-2">
           レビューしたいコードを入力して、AIによる詳細なフィードバックを受け取れます。
         </p>
       </header>
+
+      {/* 利用制限警告 */}
+      {!isAdmin && !canUseCodeReview && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>利用制限に達しました</AlertTitle>
+          <AlertDescription>
+            本日のAIコードレビュー回数制限に達しました。明日以降に再度お試しください。
+          </AlertDescription>
+        </Alert>
+      )}
 
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
         <Card>
@@ -227,7 +272,10 @@ export default function NewReviewPage() {
             >
               キャンセル
             </Button>
-            <Button type="submit" disabled={isSubmitting}>
+            <Button
+              type="submit"
+              disabled={isSubmitting || (!isAdmin && !canUseCodeReview)}
+            >
               {isSubmitting ? "送信中..." : "レビュー依頼を送信"}
             </Button>
           </CardFooter>

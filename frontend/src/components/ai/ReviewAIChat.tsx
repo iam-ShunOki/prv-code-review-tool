@@ -1,7 +1,17 @@
 // frontend/src/components/ai/ReviewAIChat.tsx
 import React, { useState, useRef, useEffect } from "react";
-import { MessageCircle, Send, X, MinusCircle, Loader2 } from "lucide-react";
+import {
+  MessageCircle,
+  Send,
+  X,
+  MinusCircle,
+  Loader2,
+  AlertCircle,
+} from "lucide-react";
 import { useAIChat, Message, ChatContext } from "@/hooks/useAIChat";
+import { useUsageLimit } from "@/contexts/UsageLimitContext";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { UsageLimitBadge } from "@/components/usage/UsageLimitBadge";
 
 // コンポーネントのプロップス
 type ReviewAIChatProps = {
@@ -22,6 +32,12 @@ const ReviewAIChat = ({
   codeContent,
   feedbacks,
 }: ReviewAIChatProps) => {
+  // 利用制限の取得
+  const { canUseFeature, getRemainingUsage, refreshUsageLimits } =
+    useUsageLimit();
+  const canUseAIChat = canUseFeature("ai_chat");
+  const remainingChats = getRemainingUsage("ai_chat");
+
   // カスタムフックによるAIチャット機能
   const chatContext: ChatContext = {
     reviewTitle,
@@ -38,6 +54,10 @@ const ReviewAIChat = ({
       reviewId,
       context: chatContext,
       onError: (error) => console.error("Chat error:", error),
+      onSuccess: () => {
+        // チャット送信成功時に残り制限を更新
+        refreshUsageLimits();
+      },
     });
 
   // State
@@ -88,7 +108,7 @@ const ReviewAIChat = ({
 
   // メッセージ送信処理
   const handleSendMessage = () => {
-    if (!inputValue.trim() || isLoading) return;
+    if (!inputValue.trim() || isLoading || !canUseAIChat) return;
 
     // メッセージを送信
     sendMessage(inputValue);
@@ -121,7 +141,10 @@ const ReviewAIChat = ({
         <div className="fixed bottom-6 right-6 w-80 sm:w-96 bg-white rounded-lg shadow-xl flex flex-col overflow-hidden border border-gray-200">
           {/* ヘッダー */}
           <div className="bg-blue-600 text-white p-3 flex justify-between items-center">
-            <h3 className="font-medium text-sm">AIアシスタント</h3>
+            <h3 className="font-medium text-sm flex items-center">
+              AIアシスタント
+              <UsageLimitBadge featureKey="ai_chat" />
+            </h3>
             <div className="flex space-x-2">
               <button
                 onClick={minimizeChat}
@@ -144,6 +167,17 @@ const ReviewAIChat = ({
           {!isMinimized && (
             <>
               <div className="flex-1 p-3 overflow-y-auto max-h-96 bg-gray-50">
+                {/* 利用制限警告 */}
+                {!canUseAIChat && (
+                  <Alert variant="destructive" className="mb-3">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertTitle>利用制限に達しました</AlertTitle>
+                    <AlertDescription>
+                      本日のAIチャットの利用回数制限に達しました。明日以降に再度お試しください。
+                    </AlertDescription>
+                  </Alert>
+                )}
+
                 {messages.map((message) => (
                   <div
                     key={message.id}
@@ -188,21 +222,29 @@ const ReviewAIChat = ({
                     value={inputValue}
                     onChange={(e) => setInputValue(e.target.value)}
                     onKeyDown={handleKeyDown}
-                    placeholder="質問を入力..."
+                    placeholder={
+                      canUseAIChat
+                        ? "質問を入力..."
+                        : "本日の利用制限に達しました"
+                    }
                     className="flex-1 p-2 border border-gray-300 rounded-l-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    disabled={isLoading}
+                    disabled={isLoading || !canUseAIChat}
                   />
                   <button
                     onClick={handleSendMessage}
                     className={`p-2 ml-2 rounded-r-md ${
-                      isLoading || !inputValue.trim()
+                      isLoading || !inputValue.trim() || !canUseAIChat
                         ? "bg-gray-300 text-gray-500 cursor-not-allowed"
                         : "bg-blue-600 text-white hover:bg-blue-700"
                     }`}
-                    disabled={isLoading || !inputValue.trim()}
+                    disabled={isLoading || !inputValue.trim() || !canUseAIChat}
                   >
                     <Send size={18} />
                   </button>
+                </div>
+                {/* 残りチャット回数表示 */}
+                <div className="mt-2 text-xs text-gray-500 text-right">
+                  残り: {remainingChats}回
                 </div>
               </div>
             </>

@@ -83,19 +83,41 @@ async function initializePullRequestMonitoring() {
  */
 async function startServer() {
   try {
-    // データベース接続
-    await AppDataSource.initialize();
-    console.log("Database connection established");
+    // データベース接続試行
+    try {
+      await AppDataSource.initialize();
+      console.log("Database connection established");
 
-    // マイグレーションの実行（必要に応じて）
-    // await AppDataSource.runMigrations();
-    // console.log("Database migrations applied");
+      // マイグレーションの実行（必要に応じて）
+      try {
+        await AppDataSource.runMigrations();
+        console.log("Database migrations applied successfully");
+      } catch (migrationError) {
+        console.error("Migration error:", migrationError);
+        // マイグレーションエラーでもサーバーは起動する
+      }
+    } catch (dbError) {
+      console.error("Database connection error:", dbError);
+      // データベース接続エラーでもサーバーは起動（機能制限付き）
+    }
+
+    // 必須テーブルの存在確認と初期データの投入
+    try {
+      await initializeBasicData();
+    } catch (initError) {
+      console.error("Data initialization error:", initError);
+    }
 
     // リポジトリホワイトリストを初期化
-    await RepositoryWhitelistService.getInstance().initialize();
-    console.log("Repository whitelist initialized");
-
-    // ルートルートのセットアップ（省略）...
+    try {
+      await RepositoryWhitelistService.getInstance().initialize();
+      console.log("Repository whitelist initialized");
+    } catch (whitelistError) {
+      console.error(
+        "Repository whitelist initialization error:",
+        whitelistError
+      );
+    }
 
     // サーバー起動
     app.listen(PORT, () => {
@@ -117,6 +139,65 @@ async function startServer() {
   }
 }
 
+/**
+ * 基本データの初期化
+ */
+async function initializeBasicData() {
+  // usage_limits テーブルの存在を確認
+  try {
+    const tableExists = await checkTableExists("usage_limits");
+    if (!tableExists) {
+      console.warn(
+        "usage_limits table does not exist. Migrations may not have been run."
+      );
+      return;
+    }
+
+    // レコードの有無を確認
+    const existingLimits = await AppDataSource.getRepository(
+      "usage_limits"
+    ).find();
+    if (existingLimits && existingLimits.length > 0) {
+      console.log("Usage limits already exist in the database");
+      return;
+    }
+
+    // 初期データの投入
+    console.log("Inserting initial usage limits data");
+    await AppDataSource.query(`
+      INSERT INTO usage_limits (feature_key, daily_limit, description, is_active)
+      VALUES 
+        ('code_review', 20, 'AIコードレビュー依頼の1日あたりの制限回数', true),
+        ('ai_chat', 30, 'AIチャットボットの1日あたりの制限回数', true)
+    `);
+    console.log("Initial usage limits data inserted successfully");
+  } catch (error) {
+    console.error("Error initializing basic data:", error);
+    // エラーは呼び出し元で処理
+    throw error;
+  }
+}
+
+/**
+ * テーブルが存在するかチェック
+ */
+async function checkTableExists(tableName: string): Promise<boolean> {
+  try {
+    const query = `
+      SELECT 1 
+      FROM information_schema.tables 
+      WHERE table_schema = DATABASE() 
+      AND table_name = ?
+    `;
+
+    const result = await AppDataSource.query(query, [tableName]);
+    return result.length > 0;
+  } catch (error) {
+    console.error(`Table existence check error (${tableName}):`, error);
+    return false;
+  }
+}
+
 // APIルートのセットアップ
 import authRoutes from "./routes/authRoutes";
 import reviewRoutes from "./routes/reviewRoutes";
@@ -132,6 +213,7 @@ import adminRepositoryRoutes from "./routes/adminRepositoryRoutes";
 import webhookRoutes from "./routes/webhookRoutes";
 import repositoryWhitelistRoutes from "./routes/repositoryWhitelistRoutes";
 import aiChatRoutes from "./routes/aiChatRoutes";
+import usageLimitRoutes from "./routes/usageLimitRoutes";
 
 // ルートの登録
 app.use("/api/auth", authRoutes);
@@ -148,6 +230,7 @@ app.use("/api/admin/repositories", adminRepositoryRoutes);
 app.use("/api/webhooks", webhookRoutes);
 app.use("/api/admin/repository-whitelist", repositoryWhitelistRoutes);
 app.use("/api/ai-chat", aiChatRoutes);
+app.use("/api/usage-limits", usageLimitRoutes);
 
 // エラーハンドリング強化
 app.use(

@@ -1,3 +1,4 @@
+// frontend/src/components/dashboard/sidebar.tsx
 "use client";
 
 import { useState, useEffect } from "react";
@@ -16,6 +17,7 @@ import {
   X,
   GitFork,
 } from "lucide-react";
+import { UsageLimitBadge } from "@/components/usage/UsageLimitBadge";
 
 export function Sidebar() {
   const { user, logout } = useAuth();
@@ -60,7 +62,12 @@ export function Sidebar() {
 
   const navigation = [
     { name: "ダッシュボード", href: "/dashboard", icon: Home },
-    { name: "コードレビュー", href: "/dashboard/reviews", icon: Code },
+    {
+      name: "コードレビュー",
+      href: "/dashboard/reviews",
+      icon: Code,
+      badge: !isAdmin ? <UsageLimitBadge featureKey="code_review" /> : null,
+    },
     { name: "進捗状況", href: "/dashboard/progress", icon: ListChecks },
     ...(isAdmin
       ? [
@@ -126,6 +133,17 @@ export function Sidebar() {
               <p>{user?.name}</p>
               <p>{user?.role === "admin" ? "管理者" : "新入社員"}</p>
             </div>
+            {/* 管理者以外の場合は利用制限バッジを表示 */}
+            {!isAdmin && (
+              <div className="mt-2 flex space-x-3">
+                <div className="flex items-center text-xs text-gray-500">
+                  <UsageLimitBadge featureKey="code_review" showLabel />
+                </div>
+                <div className="flex items-center text-xs text-gray-500">
+                  <UsageLimitBadge featureKey="ai_chat" showLabel />
+                </div>
+              </div>
+            )}
           </div>
 
           {/* ナビゲーション */}
@@ -145,7 +163,8 @@ export function Sidebar() {
                 aria-current={pathname === item.href ? "page" : undefined}
               >
                 <item.icon className="mr-3 h-5 w-5" aria-hidden="true" />
-                {item.name}
+                <span className="flex-1">{item.name}</span>
+                {item.badge && <span>{item.badge}</span>}
               </Link>
             ))}
           </nav>

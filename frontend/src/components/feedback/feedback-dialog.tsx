@@ -9,13 +9,20 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { AlertCircle, AlertTriangle, Info, CheckCircle } from "lucide-react";
+import {
+  AlertCircle,
+  AlertTriangle,
+  Info,
+  CheckCircle,
+  ExternalLink,
+} from "lucide-react";
 
 interface Feedback {
   id: number;
   submission_id: number;
   problem_point: string;
   suggestion: string;
+  reference_url?: string; // 参考URLフィールドを追加
   priority: "high" | "medium" | "low";
   line_number: number | null;
   created_at: string;
@@ -123,16 +130,34 @@ export function FeedbackDialog({
             </div>
           </div>
 
-          {/* 提案 */}
+          {/* ヒント */}
           <div>
-            <h3 className="text-sm font-medium mb-1">提案</h3>
+            <h3 className="text-sm font-medium mb-1">学習のヒント</h3>
             <div className="p-3 rounded border bg-gray-50">
               <p className="whitespace-pre-line">{feedback.suggestion}</p>
             </div>
           </div>
 
+          {/* 参考URL - 新しく追加 */}
+          {feedback.reference_url && (
+            <div>
+              <h3 className="text-sm font-medium mb-1">参考資料</h3>
+              <div className="p-3 rounded border bg-blue-50">
+                <a
+                  href={feedback.reference_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-600 hover:underline flex items-center"
+                >
+                  <ExternalLink className="h-4 w-4 mr-2" />
+                  ドキュメントを確認する
+                </a>
+              </div>
+            </div>
+          )}
+
           {/* 対応状況 */}
-          {!readOnly && onMarkResolved && (
+          {/* {!readOnly && onMarkResolved && (
             <div className="flex items-center justify-between pt-2">
               <div className="flex items-center">
                 <CheckCircle
@@ -152,13 +177,11 @@ export function FeedbackDialog({
                 {localResolved ? "未対応にする" : "対応済みにする"}
               </Button>
             </div>
-          )}
+          )} */}
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>
-            閉じる
-          </Button>
+          <Button onClick={onClose}>閉じる</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -1,3 +1,4 @@
+// backend/src/models/Feedback.ts の修正バージョン
 import {
   Entity,
   PrimaryGeneratedColumn,
@@ -27,6 +28,9 @@ export class Feedback {
 
   @Column({ type: "text" })
   suggestion: string;
+
+  @Column({ type: "text", nullable: true })
+  reference_url: string;
 
   @Column({
     type: "enum",

@@ -126,7 +126,7 @@ const SAMPLE_DATA = {
     { subject: "コード品質", A: 80, B: 65, fullMark: 100 },
     { subject: "可読性", A: 75, B: 60, fullMark: 100 },
     { subject: "提出率", A: 70, B: 55, fullMark: 100 },
-    { subject: "", A: 85, B: 70, fullMark: 100 },
+    { subject: "修正正確度", A: 85, B: 70, fullMark: 100 },
     { subject: "文章力", A: 65, B: 50, fullMark: 100 },
   ],
 };
@@ -530,9 +530,9 @@ export default function AnalyticsDashboard() {
       </div>
 
       {/* 補助グラフと重要データ - 3列グリッド */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* 優先度別フィードバック */}
-        {/* <Card>
+      {/* <div className="grid grid-cols-1 md:grid-cols-2 gap-4"> */}
+      {/* 優先度別フィードバック */}
+      {/* <Card>
           <CardHeader className="p-4 pb-2">
             <CardTitle className="text-xs font-medium">
               優先度別フィードバック
@@ -572,8 +572,8 @@ export default function AnalyticsDashboard() {
           </CardContent>
         </Card> */}
 
-        {/* 月間進捗 */}
-        <Card>
+      {/* 月間進捗 */}
+      {/* <Card>
           <CardHeader className="p-4 pb-2">
             <CardTitle className="text-xs font-medium">月間進捗状況</CardTitle>
           </CardHeader>
@@ -600,10 +600,10 @@ export default function AnalyticsDashboard() {
               提出率 87% - 対応率 78% - PR生成率 62%
             </div>
           </CardContent>
-        </Card>
+        </Card> */}
 
-        {/* 最近のアクティビティ */}
-        <Card>
+      {/* 最近のアクティビティ */}
+      {/* <Card>
           <CardHeader className="p-4 pb-2">
             <CardTitle className="text-xs font-medium">
               最近のアクティビティ
@@ -630,10 +630,10 @@ export default function AnalyticsDashboard() {
             </div>
           </CardContent>
         </Card>
-      </div>
+      </div> */}
 
       {/* スキルレベル詳細 */}
-      <Card>
+      {/* <Card>
         <CardHeader className="p-4 pb-2">
           <div className="flex justify-between">
             <CardTitle className="text-sm font-medium">
@@ -671,7 +671,7 @@ export default function AnalyticsDashboard() {
             ))}
           </div>
         </CardContent>
-      </Card>
+      </Card> */}
     </div>
   );
 

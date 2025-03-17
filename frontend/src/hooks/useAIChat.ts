@@ -1,17 +1,14 @@
 // frontend/src/hooks/useAIChat.ts
 import { useState, useCallback } from "react";
+import { v4 as uuidv4 } from "uuid";
 import { useAuth } from "@/contexts/AuthContext";
-import { useToast } from "@/components/ui/use-toast";
 
-// チャットメッセージの型定義
-export type Message = {
+export interface Message {
   id: string;
   content: string;
-  sender: "user" | "ai";
-  timestamp: Date;
-};
+  sender: "user" | "assistant";
+}
 
-// コンテキストの型定義
 export interface ChatContext {
   reviewTitle?: string;
   codeContent?: string;
@@ -26,106 +23,98 @@ interface UseAIChatOptions {
   reviewId: number;
   context?: ChatContext;
   onError?: (error: Error) => void;
+  onSuccess?: () => void;
 }
 
-export const useAIChat = ({ reviewId, context, onError }: UseAIChatOptions) => {
+export function useAIChat({
+  reviewId,
+  context,
+  onError,
+  onSuccess,
+}: UseAIChatOptions) {
   const [messages, setMessages] = useState<Message[]>([]);
-  const { user, token } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
-  const { toast } = useToast();
+  const { token } = useAuth();
+
+  // メッセージを追加
+  const addMessage = useCallback(
+    (content: string, sender: "user" | "assistant") => {
+      const newMessage: Message = {
+        id: uuidv4(),
+        content,
+        sender,
+      };
+      setMessages((prev) => [...prev, newMessage]);
+      return newMessage;
+    },
+    []
+  );
 
   // 初期メッセージを追加
-  const addInitialMessage = useCallback((message: string) => {
-    const initialMessage: Message = {
-      id: "init-" + Date.now(),
-      content: message,
-      sender: "ai",
-      timestamp: new Date(),
-    };
-    setMessages([initialMessage]);
-  }, []);
+  const addInitialMessage = useCallback(
+    (content: string) => {
+      return addMessage(content, "assistant");
+    },
+    [addMessage]
+  );
 
-  // ユーザーメッセージを送信
+  // メッセージを送信
   const sendMessage = useCallback(
-    async (messageContent: string): Promise<void> => {
-      if (!messageContent.trim() || isLoading) return;
+    async (message: string) => {
+      // ユーザーメッセージをUIに追加
+      addMessage(message, "user");
 
-      // ユーザーメッセージを追加
-      const userMessage: Message = {
-        id: "user-" + Date.now(),
-        content: messageContent.trim(),
-        sender: "user",
-        timestamp: new Date(),
-      };
-
-      setMessages((prev) => [...prev, userMessage]);
       setIsLoading(true);
 
       try {
-        // APIリクエスト送信
         const response = await fetch(
           `${process.env.NEXT_PUBLIC_API_URL}/api/ai-chat/message`,
           {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              // 認証トークンをAuthコンテキストから取得するなど
               Authorization: `Bearer ${token}`,
             },
             body: JSON.stringify({
               reviewId,
-              message: messageContent.trim(),
+              message,
               context,
             }),
           }
         );
 
         if (!response.ok) {
-          throw new Error("AIチャットAPIエラー");
+          const errorData = await response.json();
+          throw new Error(errorData.message || "AI応答の取得に失敗しました");
         }
 
         const data = await response.json();
 
-        // AIの応答をメッセージに追加
-        const aiMessage: Message = {
-          id: "ai-" + Date.now(),
-          content:
-            data.data?.message ||
-            "申し訳ありません、適切な回答を生成できませんでした。",
-          sender: "ai",
-          timestamp: new Date(),
-        };
+        // AIの応答をUIに追加
+        addMessage(data.data.message, "assistant");
 
-        setMessages((prev) => [...prev, aiMessage]);
+        // 成功コールバックがあれば実行
+        if (onSuccess) {
+          onSuccess();
+        }
       } catch (error) {
         console.error("AI Chat error:", error);
 
-        // エラーコールバックを呼び出し
+        // エラーメッセージをUIに追加
+        addMessage(
+          "申し訳ありません、エラーが発生しました。もう一度お試しください。",
+          "assistant"
+        );
+
+        // エラーコールバックがあれば実行
         if (onError && error instanceof Error) {
           onError(error);
         }
-
-        // エラーメッセージを表示
-        toast({
-          title: "エラー",
-          description: "メッセージの送信中にエラーが発生しました",
-          variant: "destructive",
-        });
-
-        // エラーメッセージを表示
-        const errorMessage: Message = {
-          id: "error-" + Date.now(),
-          content: "すみません、エラーが発生しました。もう一度お試しください。",
-          sender: "ai",
-          timestamp: new Date(),
-        };
-
-        setMessages((prev) => [...prev, errorMessage]);
       } finally {
         setIsLoading(false);
       }
     },
-    [reviewId, context, isLoading, onError, toast]
+    [token, reviewId, context, addMessage, onError, onSuccess]
   );
 
   // メッセージをリセット
@@ -137,7 +126,8 @@ export const useAIChat = ({ reviewId, context, onError }: UseAIChatOptions) => {
     messages,
     isLoading,
     sendMessage,
+    addMessage,
     addInitialMessage,
     resetMessages,
   };
-};
+}

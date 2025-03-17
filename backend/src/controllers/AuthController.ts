@@ -3,6 +3,14 @@ import { z } from "zod";
 import { AuthService } from "../services/AuthService";
 import { UserService } from "../services/UserService";
 
+declare global {
+  namespace Express {
+    interface Request {
+      sessionToken?: string;
+    }
+  }
+}
+
 export class AuthController {
   private authService: AuthService;
 
@@ -146,7 +154,10 @@ export class AuthController {
    */
   logout = async (req: Request, res: Response): Promise<void> => {
     try {
-      if (!req.sessionToken) {
+      // req.sessionTokenにアクセスするために型アサーションを使用
+      const sessionToken = (req as any).sessionToken;
+
+      if (!sessionToken) {
         res.status(400).json({
           success: false,
           message: "セッショントークンが必要です",
@@ -155,7 +166,7 @@ export class AuthController {
       }
 
       // セッションを削除
-      await this.authService.logout(req.sessionToken);
+      await this.authService.logout(sessionToken);
 
       res.status(200).json({
         success: true,
