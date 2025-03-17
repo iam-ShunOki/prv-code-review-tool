@@ -2,6 +2,7 @@
 import { useState, useCallback } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { useAuth } from "@/contexts/AuthContext";
+import { useUsageLimit } from "@/contexts/UsageLimitContext";
 
 export interface Message {
   id: string;
@@ -35,6 +36,11 @@ export function useAIChat({
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const { token } = useAuth();
+  const { getRemainingUsage, usageLimits, refreshUsageLimits } =
+    useUsageLimit();
+
+  // 現在のAIチャットの残りカウント
+  const aiChatRemaining = getRemainingUsage("ai_chat");
 
   // メッセージを追加
   const addMessage = useCallback(
@@ -58,6 +64,30 @@ export function useAIChat({
     [addMessage]
   );
 
+  // ローカルでカウンターを更新する関数
+  const decrementLocalCounter = useCallback(() => {
+    // usageLimits内のaiChatオブジェクトを更新
+    if (usageLimits.ai_chat) {
+      const currentUsed = usageLimits.ai_chat.used;
+      const currentLimit = usageLimits.ai_chat.limit;
+
+      // ローカルで使用回数をインクリメント
+      const newUsed = currentUsed + 1;
+      const newRemaining = Math.max(0, currentLimit - newUsed);
+
+      // コンテキストのローカル状態を更新（この変更はUIだけに影響し、次回のリフレッシュで上書きされる）
+      // この関数はUsageLimitContextに追加する必要があります
+      if (typeof (window as any).updateLocalUsageLimits === "function") {
+        (window as any).updateLocalUsageLimits("ai_chat", {
+          used: newUsed,
+          remaining: newRemaining,
+          limit: currentLimit,
+          canUse: newRemaining > 0,
+        });
+      }
+    }
+  }, [usageLimits]);
+
   // メッセージを送信
   const sendMessage = useCallback(
     async (message: string) => {
@@ -67,6 +97,9 @@ export function useAIChat({
       setIsLoading(true);
 
       try {
+        // 送信前に先にローカルカウンターを減らす
+        decrementLocalCounter();
+
         const response = await fetch(
           `${process.env.NEXT_PUBLIC_API_URL}/api/ai-chat/message`,
           {
@@ -97,6 +130,9 @@ export function useAIChat({
         if (onSuccess) {
           onSuccess();
         }
+
+        // 最新の使用状況を反映するためにコンテキストを更新
+        await refreshUsageLimits();
       } catch (error) {
         console.error("AI Chat error:", error);
 
@@ -110,11 +146,23 @@ export function useAIChat({
         if (onError && error instanceof Error) {
           onError(error);
         }
+
+        // エラーの場合でも最新状態を取得
+        await refreshUsageLimits();
       } finally {
         setIsLoading(false);
       }
     },
-    [token, reviewId, context, addMessage, onError, onSuccess]
+    [
+      token,
+      reviewId,
+      context,
+      addMessage,
+      onError,
+      onSuccess,
+      decrementLocalCounter,
+      refreshUsageLimits,
+    ]
   );
 
   // メッセージをリセット
@@ -129,5 +177,6 @@ export function useAIChat({
     addMessage,
     addInitialMessage,
     resetMessages,
+    aiChatRemaining,
   };
 }

@@ -1,10 +1,12 @@
-// backend/src/routes/analyticsRoutes.ts
+// backend/src/routes/analyticsRoutes.ts (更新版)
 import express from "express";
 import { AnalyticsController } from "../controllers/AnalyticsController";
+import { AnalyticsExportController } from "../controllers/AnalyticsExportController";
 import { authenticate, requireAdmin } from "../middlewares/authMiddleware";
 
 const router = express.Router();
 const analyticsController = new AnalyticsController();
+const analyticsExportController = new AnalyticsExportController();
 
 // 全てのAPIに認証と管理者権限チェックを適用
 router.use(authenticate, requireAdmin);
@@ -25,7 +27,7 @@ router.get("/feedback-stats", analyticsController.getFeedbackTypeStats);
 router.get("/employee/:id", analyticsController.getEmployeeAnalytics);
 
 // 分析レポートをエクスポート
-router.get("/export", analyticsController.exportAnalyticsData);
+router.get("/export", analyticsExportController.exportReport);
 
 // 新入社員ランキングを取得
 router.get("/trainee-ranking", analyticsController.getTraineeRanking);

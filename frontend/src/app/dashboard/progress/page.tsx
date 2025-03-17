@@ -1008,6 +1008,7 @@ export default function ProgressPage() {
                       <Progress
                         value={feedbackStats?.improvement.resolvedRate || 0}
                         className="h-2"
+                        indicatorColor="bg-green-500"
                       />
                     </div>
 

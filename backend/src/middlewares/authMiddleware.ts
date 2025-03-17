@@ -1,14 +1,6 @@
-// backend/src/middlewares/authMiddleware.ts (認証ミドルウェア修正)
-
+// backend/src/middlewares/authMiddleware.ts
 import { Request, Response, NextFunction } from "express";
-import jwt from "jsonwebtoken";
-import { UserService } from "../services/UserService";
-
-interface JwtPayload {
-  id: number;
-  email: string;
-  role: string;
-}
+import { AuthService } from "../services/AuthService";
 
 export const authenticate = async (
   req: Request,
@@ -16,7 +8,7 @@ export const authenticate = async (
   next: NextFunction
 ) => {
   try {
-    // Authorizationヘッダーを取得
+    // Get the session token from the Authorization header
     const authHeader = req.headers.authorization;
 
     if (!authHeader) {
@@ -27,8 +19,12 @@ export const authenticate = async (
       });
     }
 
-    // Bearer トークンから実際のトークン部分を取得
-    const token = authHeader.split(" ")[1];
+    // Extract the token - either from Bearer format or directly
+    let token = authHeader;
+    if (authHeader.startsWith("Bearer ")) {
+      token = authHeader.split(" ")[1];
+    }
+
     if (!token) {
       console.warn("Authentication failed: Token not found in header");
       return res.status(401).json({
@@ -37,35 +33,34 @@ export const authenticate = async (
       });
     }
 
-    try {
-      // トークンを検証
-      const decoded = jwt.verify(
-        token,
-        process.env.JWT_SECRET || "default_secret"
-      ) as JwtPayload;
+    // Store the token for later use (e.g., in logout)
+    req.sessionToken = token;
 
-      // デバッグ情報
-      console.log(`認証成功: ユーザーID=${decoded.id}, ロール=${decoded.role}`);
+    // Validate the session using the AuthService
+    const authService = new AuthService();
+    const user = await authService.validateSession(token);
 
-      // リクエストオブジェクトにユーザー情報を追加
-      req.user = {
-        id: decoded.id,
-        email: decoded.email,
-        role: decoded.role,
-      };
-
-      // 次のミドルウェアに進む
-      next();
-    } catch (error) {
-      // トークン検証エラー
-      console.error("Authentication failed: Token verification error", error);
+    if (!user) {
+      console.warn("Authentication failed: Invalid or expired session token");
       return res.status(401).json({
         success: false,
         message: "無効なトークンです",
       });
     }
+
+    // Add user info to the request object
+    req.user = {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+    };
+
+    // Debug log
+    console.log(`認証成功: ユーザーID=${user.id}, ロール=${user.role}`);
+
+    // Proceed to the next middleware
+    next();
   } catch (error) {
-    // 予期せぬエラー
     console.error("Authentication error:", error);
     return res.status(500).json({
       success: false,
@@ -125,6 +120,7 @@ declare global {
         email: string;
         role: string;
       };
+      sessionToken?: string;
     }
   }
 }

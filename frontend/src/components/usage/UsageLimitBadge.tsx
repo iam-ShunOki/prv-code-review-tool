@@ -1,8 +1,8 @@
-// frontend/src/components/usage/UsageLimitBadge.tsx (修正版)
+// frontend/src/components/usage/UsageLimitBadge.tsx (最適化版)
 "use client";
 
 import { useUsageLimit } from "@/contexts/UsageLimitContext";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState, memo } from "react";
 import {
   Battery,
   BatteryCharging,
@@ -22,28 +22,87 @@ interface UsageLimitBadgeProps {
   showLabel?: boolean;
 }
 
-export function UsageLimitBadge({
+// React.memo でコンポーネントをメモ化
+export const UsageLimitBadge = memo(function UsageLimitBadge({
   featureKey,
   showLabel = false,
 }: UsageLimitBadgeProps) {
-  const { getUsageInfo, isLoading, refreshUsageLimits } = useUsageLimit();
-  const [refreshCounter, setRefreshCounter] = useState(0);
+  const { getUsageInfo, isLoading } = useUsageLimit();
+  const [counter, setCounter] = useState(0);
 
-  // 定期的に利用状況を更新
+  // リフレッシュは必要なときだけに制限
   useEffect(() => {
+    // コンポーネントマウント時に一度だけ更新タイマーをセット
     const timer = setInterval(() => {
-      setRefreshCounter((prev) => prev + 1);
-    }, 60000); // 1分ごとに更新
+      setCounter((prev) => prev + 1);
+    }, 60000); // 1分ごとに内部カウンターを更新
 
     return () => clearInterval(timer);
   }, []);
 
-  // カウンターが変わったら利用状況を更新
-  useEffect(() => {
-    refreshUsageLimits();
-  }, [refreshCounter, refreshUsageLimits]);
+  // 情報表示を計算 - useMemo相当の最適化
+  const getDisplayInfo = useCallback(() => {
+    const usageInfo = getUsageInfo(featureKey);
 
-  const usageInfo = getUsageInfo(featureKey);
+    if (!usageInfo) {
+      return {
+        icon: <BatteryCharging className="h-4 w-4" />,
+        colorClass: "text-gray-400",
+        label: "情報なし",
+        remaining: 0,
+        limit: 0,
+      };
+    }
+
+    const { remaining, limit } = usageInfo;
+    const ratio = remaining / limit;
+
+    if (ratio > 0.7) {
+      return {
+        icon: <Battery className="h-4 w-4" />,
+        colorClass: "text-green-600",
+        label: "十分残っています",
+        remaining,
+        limit,
+      };
+    } else if (ratio > 0.3) {
+      return {
+        icon: <BatteryMedium className="h-4 w-4" />,
+        colorClass: "text-blue-600",
+        label: "残りわずかです",
+        remaining,
+        limit,
+      };
+    } else if (ratio > 0) {
+      return {
+        icon: <BatteryLow className="h-4 w-4" />,
+        colorClass: "text-yellow-600",
+        label: "もうすぐ制限に達します",
+        remaining,
+        limit,
+      };
+    } else {
+      return {
+        icon: <BatteryWarning className="h-4 w-4" />,
+        colorClass: "text-red-600",
+        label: "本日の利用制限に達しました",
+        remaining,
+        limit,
+      };
+    }
+  }, [featureKey, getUsageInfo]);
+
+  // 機能名を日本語に変換
+  const getFeatureName = useCallback(() => {
+    switch (featureKey) {
+      case "code_review":
+        return "AIコードレビュー";
+      case "ai_chat":
+        return "AIチャット";
+      default:
+        return featureKey;
+    }
+  }, [featureKey]);
 
   if (isLoading) {
     return (
@@ -54,62 +113,14 @@ export function UsageLimitBadge({
     );
   }
 
-  if (!usageInfo) {
-    return null;
-  }
-
-  // 残り回数から表示するアイコンとスタイルを決定
-  const getIconAndStyle = () => {
-    const { remaining, limit } = usageInfo;
-    const ratio = remaining / limit;
-
-    if (ratio > 0.7) {
-      return {
-        icon: <Battery className="h-4 w-4" />,
-        colorClass: "text-green-600",
-        label: "十分残っています",
-      };
-    } else if (ratio > 0.3) {
-      return {
-        icon: <BatteryMedium className="h-4 w-4" />,
-        colorClass: "text-blue-600",
-        label: "残りわずかです",
-      };
-    } else if (ratio > 0) {
-      return {
-        icon: <BatteryLow className="h-4 w-4" />,
-        colorClass: "text-yellow-600",
-        label: "もうすぐ制限に達します",
-      };
-    } else {
-      return {
-        icon: <BatteryWarning className="h-4 w-4" />,
-        colorClass: "text-red-600",
-        label: "本日の利用制限に達しました",
-      };
-    }
-  };
-
-  const { icon, colorClass, label } = getIconAndStyle();
-
-  // 機能名を日本語に変換
-  const getFeatureName = () => {
-    switch (featureKey) {
-      case "code_review":
-        return "AIコードレビュー";
-      case "ai_chat":
-        return "AIチャット";
-      default:
-        return featureKey;
-    }
-  };
+  const { icon, colorClass, label, remaining, limit } = getDisplayInfo();
 
   const badgeContent = (
     <div className={`flex items-center text-xs ${colorClass}`}>
       {icon}
       {showLabel && (
         <span className="ml-1">
-          残り{usageInfo.remaining}/{usageInfo.limit}回
+          残り{remaining}/{limit}回
         </span>
       )}
     </div>
@@ -119,7 +130,7 @@ export function UsageLimitBadge({
     <div className="text-sm">
       <p className="font-semibold">{getFeatureName()}の利用制限</p>
       <p>
-        本日の残り回数: {usageInfo.remaining}/{usageInfo.limit}回
+        本日の残り回数: {remaining}/{limit}回
       </p>
       <p className="text-xs text-gray-500 mt-1">{label}</p>
     </div>
@@ -135,4 +146,4 @@ export function UsageLimitBadge({
       </Tooltip>
     </TooltipProvider>
   );
-}
+});

@@ -33,7 +33,7 @@ const ReviewAIChat = ({
   feedbacks,
 }: ReviewAIChatProps) => {
   // 利用制限の取得
-  const { canUseFeature, getRemainingUsage, refreshUsageLimits } =
+  const { canUseFeature, getRemainingUsage, updateLocalUsageCount } =
     useUsageLimit();
   const canUseAIChat = canUseFeature("ai_chat");
   const remainingChats = getRemainingUsage("ai_chat");
@@ -53,21 +53,39 @@ const ReviewAIChat = ({
     useAIChat({
       reviewId,
       context: chatContext,
-      onError: (error) => console.error("Chat error:", error),
+      onError: (error) => {
+        console.error("Chat error:", error);
+        // エラー時には残りカウントを復元（エラーでカウントしない場合）
+        if (remainingChats > 0) {
+          updateLocalUsageCount("ai_chat", {
+            remaining: remainingChats,
+            used: usageInfo?.used || 0,
+          });
+        }
+      },
       onSuccess: () => {
-        // チャット送信成功時に残り制限を更新
-        refreshUsageLimits();
+        // 成功時の処理はuseAIChat内で行う
       },
     });
 
-  // State
+  // 現在の利用状況
+  const usageInfo = useUsageLimit().getUsageInfo("ai_chat");
+
+  // ローカルステート
   const [isOpen, setIsOpen] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [inputValue, setInputValue] = useState("");
+  const [localRemainingCount, setLocalRemainingCount] =
+    useState(remainingChats);
 
   // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // remainingChatsが変更されたらローカルステートを更新
+  useEffect(() => {
+    setLocalRemainingCount(remainingChats);
+  }, [remainingChats]);
 
   // チャットを開いたときに初期メッセージを表示
   useEffect(() => {
@@ -106,9 +124,24 @@ const ReviewAIChat = ({
     setIsMinimized(!isMinimized);
   };
 
-  // メッセージ送信処理
+  // メッセージ送信処理 (即時カウント更新機能付き)
   const handleSendMessage = () => {
     if (!inputValue.trim() || isLoading || !canUseAIChat) return;
+
+    // 送信前にローカルでカウントを減らす
+    if (localRemainingCount > 0) {
+      // UIをすぐに更新
+      setLocalRemainingCount((prev) => Math.max(0, prev - 1));
+
+      // コンテキストも更新
+      if (usageInfo) {
+        updateLocalUsageCount("ai_chat", {
+          used: usageInfo.used + 1,
+          remaining: Math.max(0, usageInfo.remaining - 1),
+          canUse: usageInfo.remaining > 1, // 残り1回なら送信後は0になるので
+        });
+      }
+    }
 
     // メッセージを送信
     sendMessage(inputValue);
@@ -166,7 +199,7 @@ const ReviewAIChat = ({
           {/* メッセージエリア */}
           {!isMinimized && (
             <>
-              <div className="flex-1 p-3 overflow-y-auto max-h-96 bg-gray-50">
+              <div className="flex-1 p-3 overflow-y-auto break-words max-h-96 bg-gray-50">
                 {/* 利用制限警告 */}
                 {!canUseAIChat && (
                   <Alert variant="destructive" className="mb-3">
@@ -242,9 +275,9 @@ const ReviewAIChat = ({
                     <Send size={18} />
                   </button>
                 </div>
-                {/* 残りチャット回数表示 */}
+                {/* 残りチャット回数表示 - リアルタイム更新 */}
                 <div className="mt-2 text-xs text-gray-500 text-right">
-                  残り: {remainingChats}回
+                  残り: {localRemainingCount}回
                 </div>
               </div>
             </>

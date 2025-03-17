@@ -68,7 +68,6 @@ export function Sidebar() {
       icon: Code,
       badge: !isAdmin ? <UsageLimitBadge featureKey="code_review" /> : null,
     },
-    { name: "進捗状況", href: "/dashboard/progress", icon: ListChecks },
     ...(isAdmin
       ? [
           { name: "分析", href: "/dashboard/analytics", icon: BarChart },
@@ -79,7 +78,7 @@ export function Sidebar() {
             icon: GitFork,
           },
         ]
-      : []),
+      : [{ name: "進捗状況", href: "/dashboard/progress", icon: ListChecks }]),
     { name: "設定", href: "/dashboard/settings", icon: Settings },
   ];
 

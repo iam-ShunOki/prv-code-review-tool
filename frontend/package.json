@@ -24,6 +24,7 @@
     "@radix-ui/react-alert-dialog": "^1.1.6",
     "@radix-ui/react-tooltip": "^1.0.3",
     "@radix-ui/react-separator": "1.1.2",
+    "@radix-ui/react-popover": "^1.0.6",
     "@tanstack/react-query": "^4.32.0",
     "axios": "^1.4.0",
     "class-variance-authority": "^0.7.0",
@@ -40,7 +41,9 @@
     "recharts": "^2.7.2",
     "tailwind-merge": "^1.14.0",
     "tailwindcss-animate": "^1.0.6",
-    "zod": "^3.21.4"
+    "zod": "^3.21.4",
+    "date-fns": "^2.30.0",
+    "react-day-picker": "^8.8.0"
   },
   "devDependencies": {
     "@types/jsonwebtoken": "^9.0.2",

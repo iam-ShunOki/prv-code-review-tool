@@ -4,6 +4,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { TraineeRanking } from "@/components/analytics/TraineeRanking";
+import { ReportExportForm } from "@/components/analytics/ReportExportForm";
 import Link from "next/link";
 import {
   Card,
@@ -13,6 +14,13 @@ import {
   CardContent,
   CardFooter,
 } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -171,6 +179,7 @@ export default function AnalyticsDashboard() {
   const [selectedYear, setSelectedYear] = useState("");
   const [joinYears, setJoinYears] = useState<number[]>([]);
   const [isCompactView, setIsCompactView] = useState(true); // 表示モード切替用の状態
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false); // エクスポートモーダル表示用の状態
   const { token } = useAuth();
   const { toast } = useToast();
   const router = useRouter();
@@ -961,11 +970,20 @@ export default function AnalyticsDashboard() {
             <Filter className="h-4 w-4 mr-2" />
             リセット
           </Button>
-
-          <Button onClick={handleExport} className="h-9">
-            <Download className="h-4 w-4 mr-2" />
-            エクスポート
-          </Button>
+          <Dialog open={isExportModalOpen} onOpenChange={setIsExportModalOpen}>
+            <DialogTrigger asChild>
+              <Button className="h-9">
+                <Download className="h-4 w-4 mr-2" />
+                エクスポート
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>レポートエクスポート</DialogTitle>
+              </DialogHeader>
+              <ReportExportForm joinYears={joinYears} departments={[]} />
+            </DialogContent>
+          </Dialog>
 
           {/* 表示モード切替ボタン */}
           <Button

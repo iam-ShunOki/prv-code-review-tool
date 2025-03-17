@@ -47,65 +47,165 @@ export class AnalyticsService {
   }
 
   /**
-   * スキルレベル分布を取得（実データ + モックデータ）
+   * スキルレベル分布を取得
    */
-  async getSkillDistribution(joinYear?: number): Promise<any> {
+  async getSkillDistribution(
+    joinYear?: number,
+    department?: string
+  ): Promise<any[]> {
     try {
-      // 実データの取得
-      const query = this.evaluationRepository
+      // TypeORMクエリビルダーを使用して、スキルレベル別の人数を集計
+      const queryBuilder = this.evaluationRepository
         .createQueryBuilder("evaluation")
         .select("evaluation.overall_level", "level")
-        .addSelect("COUNT(*)", "count")
-        .groupBy("evaluation.overall_level")
-        .orderBy("evaluation.overall_level", "ASC");
+        .addSelect("COUNT(DISTINCT evaluation.user_id)", "count")
+        .leftJoin("evaluation.user", "user");
+
+      // フィルタリング条件を追加
+      const whereConditions: string[] = [];
+      const parameters: any = {};
 
       if (joinYear) {
-        query
-          .innerJoin("evaluation.user", "user")
-          .where("user.join_year = :joinYear", { joinYear });
+        whereConditions.push("user.join_year = :joinYear");
+        parameters.joinYear = joinYear;
       }
 
-      const result = await query.getRawMany();
-
-      // 結果を整形
-      const levels = Object.values(SkillLevel);
-      const distribution = levels.map((level) => {
-        const found = result.find((r) => r.level === level);
-        return {
-          level,
-          count: found ? parseInt(found.count) : 0,
-        };
-      });
-
-      // データが少ない場合はモックデータを追加
-      if (distribution.every((d) => d.count === 0)) {
-        return this.getMockSkillDistribution();
+      if (department) {
+        whereConditions.push("user.department = :department");
+        parameters.department = department;
       }
 
-      return distribution;
+      // サブクエリで最新の評価のみを取得
+      whereConditions.push(
+        "(evaluation.id IN (" +
+          "SELECT MAX(e.id) FROM evaluations e " +
+          "WHERE e.user_id = evaluation.user_id GROUP BY e.user_id" +
+          "))"
+      );
+
+      // WHERE条件を適用
+      if (whereConditions.length > 0) {
+        queryBuilder.where(whereConditions.join(" AND "), parameters);
+      }
+
+      // グループ化して結果を取得
+      const result = await queryBuilder
+        .groupBy("evaluation.overall_level")
+        .orderBy("level", "ASC")
+        .getRawMany();
+
+      // 結果にすべてのレベルが含まれているか確認し、不足しているレベルを追加
+      const allLevels = ["A", "B", "C", "D", "E"];
+      const distributionMap = new Map(
+        result.map((item) => [item.level, parseInt(item.count)])
+      );
+
+      const fullDistribution = allLevels.map((level) => ({
+        level,
+        count: distributionMap.get(level) || 0,
+      }));
+
+      return fullDistribution;
     } catch (error) {
-      console.error("スキル分布取得エラー:", error);
-      // エラー時はモックデータを返す
-      return this.getMockSkillDistribution();
+      console.error("スキルレベル分布取得エラー:", error);
+      return [
+        { level: "A", count: 0 },
+        { level: "B", count: 0 },
+        { level: "C", count: 0 },
+        { level: "D", count: 0 },
+        { level: "E", count: 0 },
+      ];
     }
   }
 
   /**
-   * 成長推移データを取得（実データ + モックデータ）
+   * 成長推移データを取得
    */
-  async getGrowthTrend(
-    userId?: number,
-    period: string = "6months"
-  ): Promise<any> {
+  async getGrowthTrend(joinYear?: number, department?: string): Promise<any[]> {
     try {
-      // 実データの取得（ここでは簡略化）
-      // 実際のアプリケーションでは、時系列データを取得し、グラフ用に加工
+      // 6ヶ月分の月次データを生成
+      const endDate = new Date();
+      const startDate = new Date();
+      startDate.setMonth(startDate.getMonth() - 5); // 6ヶ月前から
 
-      // モックデータを使用
-      return this.getMockGrowthTrend(period, userId);
+      const months = [];
+      const currentDate = new Date(startDate);
+      while (currentDate <= endDate) {
+        months.push(new Date(currentDate));
+        currentDate.setMonth(currentDate.getMonth() + 1);
+      }
+
+      // 各月のスキルレベル平均を取得
+      const results = await Promise.all(
+        months.map(async (month) => {
+          const monthStart = new Date(month.getFullYear(), month.getMonth(), 1);
+          const monthEnd = new Date(
+            month.getFullYear(),
+            month.getMonth() + 1,
+            0
+          );
+
+          const queryBuilder = this.evaluationRepository
+            .createQueryBuilder("evaluation")
+            .select(
+              "AVG(CASE " +
+                "WHEN evaluation.overall_level = 'A' THEN 5 " +
+                "WHEN evaluation.overall_level = 'B' THEN 4 " +
+                "WHEN evaluation.overall_level = 'C' THEN 3 " +
+                "WHEN evaluation.overall_level = 'D' THEN 2 " +
+                "WHEN evaluation.overall_level = 'E' THEN 1 " +
+                "ELSE 0 END)",
+              "averageLevel"
+            )
+            .leftJoin("evaluation.user", "user")
+            .where("evaluation.created_at BETWEEN :start AND :end", {
+              start: monthStart,
+              end: monthEnd,
+            });
+
+          // フィルタリング条件を追加
+          if (joinYear) {
+            queryBuilder.andWhere("user.join_year = :joinYear", { joinYear });
+          }
+
+          if (department) {
+            queryBuilder.andWhere("user.department = :department", {
+              department,
+            });
+          }
+
+          const result = await queryBuilder.getRawOne();
+
+          return {
+            period: `${month.getFullYear()}/${month.getMonth() + 1}`,
+            year: month.getFullYear(),
+            month: month.getMonth() + 1,
+            averageLevel: result?.averageLevel
+              ? parseFloat(result.averageLevel)
+              : 0,
+          };
+        })
+      );
+
+      // 成長率を計算
+      const trendsWithGrowth = results.map((item, index) => {
+        let growthRate = 0;
+        if (index > 0 && results[index - 1].averageLevel > 0) {
+          growthRate =
+            ((item.averageLevel - results[index - 1].averageLevel) /
+              results[index - 1].averageLevel) *
+            100;
+        }
+        return {
+          ...item,
+          growthRate: parseFloat(growthRate.toFixed(1)),
+        };
+      });
+
+      return trendsWithGrowth;
     } catch (error) {
-      console.error("成長推移取得エラー:", error);
-      return this.getMockGrowthTrend(period, userId);
+      console.error("成長推移データ取得エラー:", error);
+      return [];
     }
   }
 
@@ -284,6 +384,144 @@ export class AnalyticsService {
       .slice(0, limit);
 
     return sortedRanking;
+  }
+
+  /**
+   * 今後の傾向を予測
+   */
+  async predictFutureTrend(
+    joinYear?: number,
+    department?: string
+  ): Promise<string> {
+    try {
+      // 成長推移データを取得
+      const growthTrend = await this.getGrowthTrend(joinYear, department);
+
+      // 成長率の平均を計算
+      const growthRates = growthTrend
+        .filter((item: { growthRate: number }) => item.growthRate != 0)
+        .map((item: { growthRate: any }) => item.growthRate);
+      const averageGrowthRate =
+        growthRates.length > 0
+          ? growthRates.reduce((acc: any, val: any) => acc + val, 0) /
+            growthRates.length
+          : 0;
+
+      // スキルレベル分布を取得
+      const skillDistribution = await this.getSkillDistribution(
+        joinYear,
+        department
+      );
+
+      // 現在のスキルレベル平均を計算
+      const totalTrainees = skillDistribution.reduce(
+        (acc, item) => acc + item.count,
+        0
+      );
+      let currentAvgLevel = 0;
+
+      if (totalTrainees > 0) {
+        const weightedSum = skillDistribution.reduce((acc, item) => {
+          const levelWeight =
+            ({ A: 5, B: 4, C: 3, D: 2, E: 1 } as Record<string, number>)[
+              item.level
+            ] || 0;
+
+          return acc + levelWeight * item.count;
+        }, 0);
+
+        currentAvgLevel = weightedSum / totalTrainees;
+      }
+
+      // 3ヶ月後のスキルレベルを予測
+      const predictedAvgLevel =
+        currentAvgLevel * (1 + (averageGrowthRate / 100) * 3);
+
+      // 部署や年度のフィルター文字列を作成
+      const filterDesc = [];
+      if (joinYear) {
+        filterDesc.push(`${joinYear}年度入社の新入社員`);
+      } else {
+        filterDesc.push(`全年度の新入社員`);
+      }
+
+      if (department) {
+        filterDesc.push(`${department}部署に所属する社員`);
+      } else {
+        filterDesc.push(`全部署の社員`);
+      }
+
+      // トレンド文字列を生成
+      let trendText = `【分析対象】${filterDesc.join("かつ")}\n\n`;
+
+      // 現在の状況説明
+      trendText += `【現在の状況】\n`;
+      trendText += `・新入社員数: ${totalTrainees}名\n`;
+      trendText += `・現在の平均スキルレベル: ${currentAvgLevel.toFixed(
+        2
+      )}（5段階評価）\n`;
+      trendText += `・過去6ヶ月の平均成長率: ${averageGrowthRate.toFixed(
+        2
+      )}%/月\n\n`;
+
+      // 予測結果
+      trendText += `【3ヶ月後の予測】\n`;
+      trendText += `・予測平均スキルレベル: ${predictedAvgLevel.toFixed(
+        2
+      )}（5段階評価）\n`;
+
+      // スキルレベルの解釈
+      const interpretLevel = (level: number): string => {
+        if (level >= 4.5) return "A（熟練）";
+        if (level >= 3.5) return "B（上級）";
+        if (level >= 2.5) return "C（中級）";
+        if (level >= 1.5) return "D（初級）";
+        return "E（入門）";
+      };
+
+      trendText += `・予測スキルレベル評価: ${interpretLevel(
+        predictedAvgLevel
+      )}\n\n`;
+
+      // 傾向の解釈と提案
+      trendText += `【傾向分析】\n`;
+
+      if (averageGrowthRate > 15) {
+        trendText += `・成長率が非常に高く、効果的な学習が行われています。現在の学習プログラムを継続し、さらに発展的な内容を取り入れることを推奨します。\n`;
+      } else if (averageGrowthRate > 5) {
+        trendText += `・安定した成長が見られます。現在の学習プログラムは効果的ですが、より高度なチャレンジを導入することで成長を加速できる可能性があります。\n`;
+      } else if (averageGrowthRate > 0) {
+        trendText += `・緩やかな成長が見られますが、改善の余地があります。より実践的な課題や個別指導の強化を検討してください。\n`;
+      } else {
+        trendText += `・成長が停滞している可能性があります。学習プログラムの見直しや、新たな刺激を与える取り組みを検討してください。\n`;
+      }
+
+      // レベル分布に基づく提案
+      const highLevelCount = skillDistribution
+        .filter((item) => item.level === "A" || item.level === "B")
+        .reduce((acc, item) => acc + item.count, 0);
+
+      const lowLevelCount = skillDistribution
+        .filter((item) => item.level === "D" || item.level === "E")
+        .reduce((acc, item) => acc + item.count, 0);
+
+      if (highLevelCount > lowLevelCount && totalTrainees > 0) {
+        const highRatio = (highLevelCount / totalTrainees) * 100;
+        trendText += `・上位レベル(A・B)の社員が${highRatio.toFixed(
+          1
+        )}%を占めており、メンター制度の導入や知識共有の場を設けることで、チーム全体のスキル向上が期待できます。\n`;
+      } else if (lowLevelCount > 0 && totalTrainees > 0) {
+        const lowRatio = (lowLevelCount / totalTrainees) * 100;
+        trendText += `・初級レベル(D・E)の社員が${lowRatio.toFixed(
+          1
+        )}%を占めています。基礎的な学習コンテンツの拡充や、段階的な課題設定を行うことで、底上げを図ることが重要です。\n`;
+      }
+
+      return trendText;
+    } catch (error) {
+      console.error("傾向予測エラー:", error);
+      return "十分なデータがないため、信頼性の高い予測ができません。より多くのデータを収集することで、精度の高い予測が可能になります。";
+    }
   }
 
   /**

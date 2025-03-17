@@ -20,7 +20,6 @@ export default function DashboardPage() {
           ようこそ、{user?.name}さん。コードレビューツールへ。
         </p>
       </header>
-
       {/* ステータスカード */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <Card className="p-6">
@@ -67,53 +66,45 @@ export default function DashboardPage() {
           </div>
         </Card>
       </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* 利用状況表示 */}
-        <div className="col-span-1">
-          <UsageLimitDisplay />
-        </div>
-
-        {/* クイックアクセス */}
-        <div className="col-span-1 md:col-span-2">
-          <h2 className="text-xl font-bold mb-4">クイックアクセス</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* 各カードの高さを揃え、ボタンを下部に配置するためのレイアウト修正 */}
-            <Card className="p-6 flex flex-col h-full">
-              <div className="flex-1">
-                <h3 className="font-semibold flex items-center">
-                  <Code className="h-5 w-5 mr-2" />
-                  コードレビュー
-                </h3>
-                <p className="my-4 text-gray-500 text-sm">
-                  コードをアップロードして、AIによる詳細なレビューを受けられます。
-                </p>
-              </div>
-              <div className="mt-auto pt-4">
-                <Button asChild className="w-full">
-                  <Link href="/dashboard/reviews">レビュー一覧</Link>
-                </Button>
-              </div>
-            </Card>
-
-            <Card className="p-6 flex flex-col h-full">
-              <div className="flex-1">
-                <h3 className="font-semibold flex items-center">
-                  <TrendingUp className="h-5 w-5 mr-2" />
-                  進捗状況の確認
-                </h3>
-                <p className="my-4 text-gray-500 text-sm">
-                  これまでのレビュー履歴や成長推移を確認できます。スキルレベルと改善ポイントも確認できます。
-                </p>
-              </div>
-              <div className="mt-auto pt-4">
-                <Button asChild variant="outline" className="w-full">
-                  <Link href="/dashboard/progress">確認する</Link>
-                </Button>
-              </div>
-            </Card>
-
-            {isAdmin && (
+      {isAdmin ? (
+        <div className="grid grid-cols-1 md:grid-cols-3C gap-6">
+          {/* クイックアクセス */}
+          <div className="col-span-1 md:col-span-2">
+            <h2 className="text-xl font-bold mb-4">クイックアクセス</h2>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {/* 各カードの高さを揃え、ボタンを下部に配置するためのレイアウト修正 */}
+              <Card className="p-6 flex flex-col h-full">
+                <div className="flex-1">
+                  <h3 className="font-semibold flex items-center">
+                    <Code className="h-5 w-5 mr-2" />
+                    コードレビュー
+                  </h3>
+                  <p className="my-4 text-gray-500 text-sm">
+                    コードをアップロードして、AIによる詳細なレビューを受けられます。
+                  </p>
+                </div>
+                <div className="mt-auto pt-4">
+                  <Button asChild className="w-full">
+                    <Link href="/dashboard/reviews">レビュー一覧</Link>
+                  </Button>
+                </div>
+              </Card>
+              <Card className="p-6 flex flex-col h-full">
+                <div className="flex-1">
+                  <h3 className="font-semibold flex items-center">
+                    <TrendingUp className="h-5 w-5 mr-2" />
+                    進捗状況の確認
+                  </h3>
+                  <p className="my-4 text-gray-500 text-sm">
+                    これまでのレビュー履歴や成長推移を確認できます。スキルレベルと改善ポイントも確認できます。
+                  </p>
+                </div>
+                <div className="mt-auto pt-4">
+                  <Button asChild variant="outline" className="w-full">
+                    <Link href="/dashboard/progress">確認する</Link>
+                  </Button>
+                </div>
+              </Card>
               <Card className="p-6 flex flex-col h-full">
                 <div className="flex-1">
                   <h3 className="font-semibold flex items-center">
@@ -130,10 +121,58 @@ export default function DashboardPage() {
                   </Button>
                 </div>
               </Card>
-            )}
+            </div>
           </div>
         </div>
-      </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {/* 利用状況表示 */}
+          <div className="col-span-1">
+            <UsageLimitDisplay />
+          </div>
+
+          {/* クイックアクセス */}
+          <div className="col-span-1 md:col-span-2">
+            <h2 className="text-xl font-bold mb-4">クイックアクセス</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* 各カードの高さを揃え、ボタンを下部に配置するためのレイアウト修正 */}
+              <Card className="p-6 flex flex-col h-full">
+                <div className="flex-1">
+                  <h3 className="font-semibold flex items-center">
+                    <Code className="h-5 w-5 mr-2" />
+                    コードレビュー
+                  </h3>
+                  <p className="my-4 text-gray-500 text-sm">
+                    コードをアップロードして、AIによる詳細なレビューを受けられます。
+                  </p>
+                </div>
+                <div className="mt-auto pt-4">
+                  <Button asChild className="w-full">
+                    <Link href="/dashboard/reviews">レビュー一覧</Link>
+                  </Button>
+                </div>
+              </Card>
+
+              <Card className="p-6 flex flex-col h-full">
+                <div className="flex-1">
+                  <h3 className="font-semibold flex items-center">
+                    <TrendingUp className="h-5 w-5 mr-2" />
+                    進捗状況の確認
+                  </h3>
+                  <p className="my-4 text-gray-500 text-sm">
+                    これまでのレビュー履歴や成長推移を確認できます。スキルレベルと改善ポイントも確認できます。
+                  </p>
+                </div>
+                <div className="mt-auto pt-4">
+                  <Button asChild variant="outline" className="w-full">
+                    <Link href="/dashboard/progress">確認する</Link>
+                  </Button>
+                </div>
+              </Card>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
