@@ -1,13 +1,15 @@
+// backend/src/services/AIService.ts
 import { OpenAI } from "@langchain/openai";
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { PromptTemplate } from "@langchain/core/prompts";
+import { Document } from "@langchain/core/documents";
 import { Feedback, FeedbackPriority } from "../models/Feedback";
 import { BacklogService } from "./BacklogService";
-import * as path from "path"; // path モジュールを追加
 import { FeedbackService } from "./FeedbackService";
 import { SubmissionService } from "./SubmissionService";
 import { CodeEmbeddingService } from "./CodeEmbeddingService";
 import { CodeSubmission, SubmissionStatus } from "../models/CodeSubmission";
+import * as path from "path";
 
 // レビュー結果用のインターフェースを定義
 interface ReviewFeedback {
@@ -16,16 +18,7 @@ interface ReviewFeedback {
   priority: FeedbackPriority;
   line_number?: number;
   file_path?: string;
-}
-
-interface ChatContext {
-  reviewTitle?: string;
-  codeContent?: string;
-  feedbacks?: Array<{
-    problem_point: string;
-    suggestion: string;
-    priority: string;
-  }>;
+  reference_url?: string; // 参考URLを追加
 }
 
 export class AIService {
@@ -54,158 +47,258 @@ export class AIService {
       suggestion: feedback.suggestion,
       priority: feedback.priority,
       line_number: feedback.line_number,
-      // file_path は Feedback モデルにないので省略
+      reference_url: feedback.reference_url,
     }));
   }
 
-  // PR 用のレビュー実行
+  /**
+   * プルリクエストのレビューを実行
+   */
   async reviewPullRequest(
     projectKey: string,
     repoName: string,
     pullRequestId: number
   ): Promise<ReviewFeedback[]> {
+    console.log(
+      `Starting AI review for PR #${pullRequestId} in ${projectKey}/${repoName}`
+    );
+
     try {
-      console.log(
-        `Starting AI review for PR #${pullRequestId} in ${projectKey}/${repoName}`
-      );
-
-      // Get the backlog service
+      // Backlogから差分情報を取得
       const backlogService = new BacklogService();
-
-      // Get diff information using our enhanced method
-      const diffInfo = await backlogService.getPullRequestDiff(
+      const diffData = await backlogService.getPullRequestDiff(
         projectKey,
         repoName,
         pullRequestId
       );
 
-      // エラーが返された場合の処理
-      if (diffInfo.error) {
-        console.warn(`Warning in PR #${pullRequestId}: ${diffInfo.error}`);
-        return [
-          {
-            problem_point: "差分の取得に問題が発生しました",
-            suggestion: `GitHub PR の差分情報を取得できませんでした。\n\n理由: ${diffInfo.error}\n\nPRの内容を確認し、ブランチ名が正しいことを確認してください。`,
-            priority: FeedbackPriority.MEDIUM,
-            line_number: undefined,
-            file_path: "error.log",
-          },
-        ];
-      }
+      console.log(`Got diff data for PR #${pullRequestId}, processing...`);
 
-      if (!diffInfo.changedFiles || diffInfo.changedFiles.length === 0) {
-        console.log(`No changed files found for PR #${pullRequestId}`);
-        return [
-          {
-            problem_point: "変更ファイルが見つかりません",
-            suggestion:
-              "このプルリクエストには変更されたファイルが検出されませんでした。変更が正しくコミットされていることを確認してください。",
-            priority: FeedbackPriority.LOW,
-            line_number: undefined,
-            file_path: "info.log",
-          },
-        ];
-      }
-
-      // Process each changed file
+      // 全フィードバックを格納する配列
       const allFeedbacks: ReviewFeedback[] = [];
 
-      for (const file of diffInfo.changedFiles) {
-        // Skip deleted files
-        if (file.status === "deleted") {
-          console.log(`Skipping deleted file: ${file.filePath}`);
-          continue;
-        }
+      // diffDataの構造を確認
+      if (diffData.changedFiles && Array.isArray(diffData.changedFiles)) {
+        // 変更ファイルごとに処理
+        for (const file of diffData.changedFiles) {
+          console.log(
+            `Processing file: ${file.filePath}, status: ${file.status}`
+          );
 
-        // ファイル内容が取得できているか確認
-        if (!file.content) {
-          console.warn(`No content available for file: ${file.filePath}`);
-          allFeedbacks.push({
-            problem_point: `${file.filePath} の内容を取得できませんでした`,
-            suggestion:
-              "ファイルの内容を取得できませんでした。ブランチが正しく設定されているか確認してください。",
-            priority: FeedbackPriority.LOW,
-            line_number: undefined,
-            file_path: file.filePath,
-          });
-          continue;
-        }
-
-        // Only review code files (skip binaries, images, etc.)
-        if (this.isCodeFile(file.filePath)) {
-          console.log(`Reviewing file: ${file.filePath}`);
-          try {
-            const fileFeedbacks = await this.analyzeCodeWithContext(
-              file.content,
-              file.diff || "", // 差分情報がnullの場合は空文字列を使用
-              {
-                filePath: file.filePath,
-                pullRequestId,
-                projectKey,
-                repoName,
-              }
-            );
-
-            allFeedbacks.push(...fileFeedbacks);
-          } catch (fileAnalysisError) {
-            console.error(
-              `Error analyzing file ${file.filePath}:`,
-              fileAnalysisError
-            );
-            allFeedbacks.push({
-              problem_point: `${file.filePath} の分析中にエラーが発生しました`,
-              suggestion:
-                "ファイル分析中にエラーが発生しました。システム管理者に連絡してください。",
-              priority: FeedbackPriority.LOW,
-              line_number: undefined,
-              file_path: file.filePath,
-            });
+          // ファイルが削除されている場合はスキップ
+          if (file.status === "deleted") {
+            console.log(`Skipping deleted file: ${file.filePath}`);
+            continue;
           }
-        } else {
-          console.log(`Skipping non-code file: ${file.filePath}`);
+
+          // ファイルの拡張子をチェックしてコードファイルのみを処理
+          if (!this.isCodeFile(file.filePath)) {
+            console.log(`Skipping non-code file: ${file.filePath}`);
+            continue;
+          }
+
+          try {
+            // diff情報からコードを抽出
+            const { content, filePath } = this.extractCodeFromGitDiff(
+              file.diff
+            );
+            const actualFilePath = file.filePath || filePath || "unknown.file";
+
+            if (!content || content.trim() === "") {
+              console.log(
+                `No content extracted from diff for ${actualFilePath}`
+              );
+              continue;
+            }
+
+            console.log(
+              `Extracted ${
+                content.split("\n").length
+              } lines of code from ${actualFilePath}`
+            );
+
+            // AI分析を実行
+            try {
+              const feedbacks = await this.analyzeCodeWithPRContext(
+                content,
+                file.diff,
+                {
+                  filePath: actualFilePath,
+                  pullRequestId,
+                  projectKey,
+                  repoName,
+                }
+              );
+
+              allFeedbacks.push(...feedbacks);
+            } catch (analysisError) {
+              console.error(
+                `Error analyzing file ${actualFilePath}:`,
+                analysisError
+              );
+
+              // エラー情報を確認して適切なフィードバックを生成
+              const errorMessage =
+                analysisError instanceof Error
+                  ? analysisError.message
+                  : String(analysisError);
+
+              let suggestion = "コードの解析中にエラーが発生しました。";
+              let referenceUrl = "";
+
+              // 言語固有のエラーに対応
+              if (
+                actualFilePath.endsWith(".py") &&
+                errorMessage.includes("f-string")
+              ) {
+                suggestion =
+                  "Pythonのf-string構文に問題があります。f-string内の全ての変数が定義されていることを確認してください。";
+                referenceUrl =
+                  "https://docs.python.org/3/tutorial/inputoutput.html#formatted-string-literals";
+              }
+
+              allFeedbacks.push({
+                problem_point: `${actualFilePath}のコードに構文エラーが見つかりました`,
+                suggestion,
+                priority: FeedbackPriority.HIGH,
+                line_number: undefined,
+                file_path: actualFilePath,
+                reference_url: referenceUrl,
+              });
+            }
+          } catch (fileProcessingError) {
+            console.error(`Error processing file:`, fileProcessingError);
+            continue;
+          }
         }
+      } else {
+        console.warn(
+          `changedFiles not found or not array in diffData for PR #${pullRequestId}`
+        );
+        console.log(
+          "diffData structure:",
+          JSON.stringify(diffData, null, 2).substring(0, 500) + "..."
+        );
+
+        // フォールバック処理
+        const fallbackFeedback = await this.generateFallbackReview(
+          diffData,
+          projectKey,
+          repoName,
+          pullRequestId
+        );
+        allFeedbacks.push(...fallbackFeedback);
       }
 
-      // 何もフィードバックがない場合は良好メッセージを1つ返す
+      // 何も問題が見つからない場合は良好メッセージを返す
       if (allFeedbacks.length === 0) {
-        return [
-          {
-            problem_point: "コードは良好です",
-            suggestion:
-              "変更内容を確認しましたが、特に問題は見つかりませんでした。良い実装です！",
-            priority: FeedbackPriority.LOW,
-            line_number: undefined,
-            file_path: "summary.md",
-          },
-        ];
+        allFeedbacks.push({
+          problem_point: "コードレビューで問題は見つかりませんでした",
+          suggestion:
+            "変更されたコードは良好で、重大な問題点は見つかりませんでした。良い実装です！",
+          priority: FeedbackPriority.LOW,
+          line_number: undefined,
+          file_path: "summary.md",
+          reference_url: undefined,
+        });
       }
 
       return allFeedbacks;
     } catch (error) {
       console.error(`Error reviewing PR #${pullRequestId}:`, error);
-      // エラー時もフィードバックを返す
       return [
         {
           problem_point: "レビュー処理中にエラーが発生しました",
           suggestion: `エラー内容: ${
             error instanceof Error ? error.message : String(error)
-          }\n\nシステム管理者に連絡してください。`,
+          }`,
           priority: FeedbackPriority.MEDIUM,
           line_number: undefined,
           file_path: "error.log",
+          reference_url: undefined,
         },
       ];
     }
   }
 
-  // コードファイルかどうかを判定
+  /**
+   * Gitのdiffテキストから実際のコード内容を抽出
+   */
+  private extractCodeFromGitDiff(diffText: string): {
+    content: string;
+    filePath: string | null;
+  } {
+    try {
+      // ファイル名を抽出
+      let filePath = null;
+      const filePathMatch = diffText.match(/\+\+\+ b\/(.*?)$/m);
+      if (
+        filePathMatch &&
+        filePathMatch[1] &&
+        filePathMatch[1] !== "/dev/null"
+      ) {
+        filePath = filePathMatch[1];
+      }
+
+      // 追加された行のみを抽出
+      const codeLines: string[] = [];
+      const diffLines = diffText.split("\n");
+
+      let inCodeSection = false;
+      for (const line of diffLines) {
+        // チャンク見出し (@@) 以降を処理
+        if (line.startsWith("@@")) {
+          inCodeSection = true;
+          continue;
+        }
+
+        if (inCodeSection) {
+          // 追加行 (+で始まる) のみを保持、先頭の+は削除
+          if (line.startsWith("+")) {
+            codeLines.push(line.substring(1));
+          }
+          // 変更なし行 (先頭記号なし) も保持
+          else if (
+            !line.startsWith("-") &&
+            !line.startsWith("diff") &&
+            !line.startsWith("index") &&
+            !line.startsWith("---") &&
+            !line.startsWith("+++")
+          ) {
+            codeLines.push(line);
+          }
+        }
+      }
+
+      // 最終的なコード内容
+      return {
+        content: codeLines.join("\n"),
+        filePath,
+      };
+    } catch (error) {
+      console.error("Error extracting code from git diff:", error);
+      return {
+        content: "",
+        filePath: null,
+      };
+    }
+  }
+
+  /**
+   * コードファイルかどうかを判定
+   */
   private isCodeFile(filePath: string): boolean {
-    // Get file extension
+    // 拡張子が存在しない場合
+    if (!filePath || !path.extname(filePath)) {
+      return false;
+    }
+
+    // 拡張子を取得して小文字化
     const ext = path.extname(filePath).toLowerCase();
 
-    // List of extensions we consider as code
+    // サポートするコード拡張子のリスト
     const codeExtensions = [
-      // Programming languages
+      // プログラミング言語
       ".js",
       ".ts",
       ".jsx",
@@ -232,7 +325,7 @@ export class AIService {
       ".scss",
       ".sass",
       ".less",
-      // Config files
+      // 設定ファイル
       ".json",
       ".yaml",
       ".yml",
@@ -241,13 +334,21 @@ export class AIService {
       ".ini",
       ".conf",
       ".config",
+      // その他
+      ".md",
+      ".markdown",
+      ".txt",
+      ".gitignore",
+      ".env.example",
     ];
 
     return codeExtensions.includes(ext);
   }
 
-  // 差分情報を含むコード分析
-  private async analyzeCodeWithContext(
+  /**
+   * PR情報を用いたコード分析
+   */
+  private async analyzeCodeWithPRContext(
     code: string,
     diff: string | null,
     context: {
@@ -257,41 +358,428 @@ export class AIService {
       repoName: string;
     }
   ): Promise<ReviewFeedback[]> {
-    // 差分に焦点を当てたプロンプトを作成
+    // ファイル拡張子を取得
+    const fileExt = path.extname(context.filePath).toLowerCase();
+
+    // 言語の特定
+    const language = this.detectLanguageFromExtension(fileExt);
+
+    // プロンプトテンプレート
     const promptTemplate = PromptTemplate.fromTemplate(`
       あなたはエキスパートプログラマーとして、新入社員のコード学習を支援する任務を負っています。
-      以下のファイルの変更を分析し、問題点を特定してください。ただし、具体的な解決策は提供せず、
-      学習を促進するヒントと公式ドキュメントへの参照を提供してください。
-    
+      以下のプルリクエストの変更を分析し、問題点を特定してください。
+      
       ## ファイル情報
       ファイルパス: {filePath}
+      言語: {language}
       プルリクエストID: {pullRequestId}
       プロジェクト: {projectKey}/{repoName}
-    
-      ## 変更差分 (Git Diff)
+      
+      ## 変更されたコード
+      \`\`\`{language}
+      {code}
       \`\`\`
-      {diff}
-      \`\`\`
+      
+      ## レビュー指示
+      1. コード内の問題点を優先度の高い順に3〜5個特定してください。
+      2. それぞれの問題点について以下のポイントに注目してください：
+         - コードの読みやすさと保守性
+         - 命名規則とコーディング標準
+         - パフォーマンスと効率性
+         - エラー処理とエッジケース
+         - セキュリティの懸念事項
+         - {language}の特有のベストプラクティス
+      3. 各問題について、なぜ問題なのかを教育的に説明し、改善のためのヒントを提供してください。
+      4. 具体的な解決策ではなく、学習者が自ら考えて解決できるヒントを提供してください。
+      5. 各問題の優先度を設定してください（high/medium/low）。
+      6. 可能な場合は問題がある行番号を特定してください。
+      7. 各問題点には関連する公式ドキュメントやベストプラクティスガイドへの具体的なURLを含めてください。
+      
+      結果は以下のJSON形式で返してください（マークダウンなどの追加フォーマットは不要）:
+      [
+        {{
+          "problem_point": "問題点の簡潔な説明",
+          "suggestion": "問題の本質を理解するためのヒントと学習のポイント",
+          "reference_url": "関連する公式ドキュメントまたはベストプラクティスガイドのURL",
+          "priority": "high/medium/low",
+          "line_number": 該当する行番号または null
+        }}
+      ]
+    `);
+
+    // プロンプトを実行
+    const parser = new StringOutputParser();
+    const chain = promptTemplate.pipe(this.model).pipe(parser);
+
+    const result = await chain.invoke({
+      code,
+      language,
+      filePath: context.filePath,
+      pullRequestId: context.pullRequestId.toString(),
+      projectKey: context.projectKey,
+      repoName: context.repoName,
+    });
+
+    // 結果の解析
+    try {
+      // JSON部分を抽出
+      let cleanedResult = result.trim();
+
+      // JSON開始と終了を探す
+      const jsonStartIndex = cleanedResult.indexOf("[");
+      const jsonEndIndex = cleanedResult.lastIndexOf("]");
+
+      if (
+        jsonStartIndex !== -1 &&
+        jsonEndIndex !== -1 &&
+        jsonEndIndex > jsonStartIndex
+      ) {
+        // JSONオブジェクトのみを抽出
+        cleanedResult = cleanedResult.substring(
+          jsonStartIndex,
+          jsonEndIndex + 1
+        );
+      } else {
+        // マークダウンのコードブロックを削除
+        cleanedResult = cleanedResult
+          .replace(/```json\s*/g, "")
+          .replace(/```\s*$/g, "")
+          .trim();
+      }
+
+      const feedbacks = JSON.parse(cleanedResult);
+
+      // フィードバックをマッピング
+      return feedbacks.map((feedback: any) => ({
+        problem_point: feedback.problem_point,
+        suggestion: feedback.suggestion,
+        priority: this.mapPriority(feedback.priority),
+        line_number:
+          feedback.line_number === null ? undefined : feedback.line_number,
+        file_path: context.filePath,
+        reference_url: feedback.reference_url,
+      }));
+    } catch (error) {
+      console.error("Failed to parse AI response:", error);
+      console.log("Raw response:", result);
+
+      // エラー時のフォールバック
+      return [
+        {
+          problem_point: `${context.filePath} のレビュー中にエラーが発生しました`,
+          suggestion:
+            "AIからの応答を解析できませんでした。管理者に報告してください。",
+          priority: FeedbackPriority.MEDIUM,
+          line_number: undefined,
+          file_path: context.filePath,
+          reference_url: undefined,
+        },
+      ];
+    }
+  }
+
+  /**
+   * diffデータから直接フィードバックを生成するフォールバックメソッド
+   */
+  private async generateFallbackReview(
+    diffData: any,
+    projectKey: string,
+    repoName: string,
+    pullRequestId: number
+  ): Promise<ReviewFeedback[]> {
+    console.log("Using fallback review method for PR #" + pullRequestId);
+
+    try {
+      // diffDataを文字列に変換
+      let diffText = "";
+
+      if (typeof diffData === "object") {
+        // PRの基本情報を追加
+        if (diffData.pullRequest) {
+          diffText += `プルリクエスト: ${
+            diffData.pullRequest.summary || "不明"
+          }\n`;
+        }
+
+        // コミット情報を追加
+        if (Array.isArray(diffData.commits)) {
+          diffText += `コミット数: ${diffData.commits.length}\n`;
+          diffData.commits.slice(0, 3).forEach((commit: any, i: number) => {
+            if (commit.message) {
+              diffText += `コミット${i + 1}: ${commit.message}\n`;
+            }
+          });
+        }
+
+        // diffTextを追加（長すぎる場合は切り詰め）
+        diffText += JSON.stringify(diffData).substring(0, 10000);
+      } else if (typeof diffData === "string") {
+        diffText = diffData.substring(0, 10000);
+      }
+
+      if (!diffText || diffText.trim() === "") {
+        return [
+          {
+            problem_point: "レビュー対象のコードが見つかりませんでした",
+            suggestion:
+              "プルリクエストにコード変更が含まれているか確認してください。",
+            priority: FeedbackPriority.LOW,
+            line_number: undefined,
+            file_path: "general.info",
+            reference_url: undefined,
+          },
+        ];
+      }
+
+      // AIに直接diffTextを渡してレビューを生成
+      const promptTemplate = PromptTemplate.fromTemplate(`
+        あなたはエキスパートプログラマーとして、下記のプルリクエスト情報からコードレビューを生成する任務があります。
+        データが構造化されていないため、あなたの専門知識を活かして変更内容を分析し、問題点を見つけてください。
+
+        ## プルリクエスト情報
+        プロジェクト: {projectKey}/{repoName}
+        PR ID: {pullRequestId}
+
+        ## ソースデータ
+        {diffText}
+
+        ## レビュー指示
+        1. 上記のデータから、コード変更を特定し、主要な問題点を最大5つ抽出してください
+        2. 特定した問題のそれぞれについて、なぜ問題なのかと改善のヒントを提案してください
+        3. 問題の優先度を評価してください（high, medium, low）
+
+        結果は以下のJSON形式で返してください（マークダウンなどの追加フォーマットは不要）:
+        [
+          {{
+            "problem_point": "問題点の簡潔な説明",
+            "suggestion": "問題の本質を理解するためのヒントと学習のポイント",
+            "reference_url": "関連する公式ドキュメントまたはベストプラクティスガイドのURL",
+            "priority": "high/medium/low",
+            "line_number": null
+          }}
+        ]
+      `);
+
+      // プロンプト実行
+      const parser = new StringOutputParser();
+      const chain = promptTemplate.pipe(this.model).pipe(parser);
+
+      const result = await chain.invoke({
+        projectKey,
+        repoName,
+        pullRequestId: pullRequestId.toString(),
+        diffText,
+      });
+
+      // 結果の解析
+      try {
+        // JSONの開始と終了を探して抽出
+        const jsonStart = result.indexOf("[");
+        const jsonEnd = result.lastIndexOf("]") + 1;
+
+        if (jsonStart >= 0 && jsonEnd > jsonStart) {
+          const jsonContent = result.substring(jsonStart, jsonEnd);
+          const feedbacks = JSON.parse(jsonContent);
+
+          console.log(
+            `\n\n ====最終的なフィードバックです。==== \n\n ${feedbacks}`
+          );
+
+          // 結果をマッピング
+          return feedbacks.map((feedback: any) => ({
+            problem_point: feedback.problem_point,
+            suggestion: feedback.suggestion,
+            priority: this.mapPriority(feedback.priority),
+            line_number: undefined,
+            file_path: "unspecified.file",
+            reference_url: feedback.reference_url,
+          }));
+        }
+      } catch (parseError) {
+        console.error("Error parsing fallback review:", parseError);
+      }
+
+      // 最終フォールバック
+      return [
+        {
+          problem_point: "コード変更の詳細な分析ができませんでした",
+          suggestion:
+            "提出されたコードに明確な変更が見つからないか、解析に失敗しました。より明確なコード変更をプルリクエストに含めてください。",
+          priority: FeedbackPriority.MEDIUM,
+          line_number: undefined,
+          file_path: "analysis.error",
+          reference_url: undefined,
+        },
+      ];
+    } catch (error) {
+      console.error("Failed to generate fallback review:", error);
+      return [
+        {
+          problem_point: "レビュー生成中にエラーが発生しました",
+          suggestion: `エラー内容: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          priority: FeedbackPriority.MEDIUM,
+          line_number: undefined,
+          file_path: "error.log",
+          reference_url: undefined,
+        },
+      ];
+    }
+  }
+
+  /**
+   * ファイル拡張子から言語を検出
+   */
+  private detectLanguageFromExtension(fileExt: string): string {
+    const languageMap: { [key: string]: string } = {
+      // JavaScript
+      ".js": "javascript",
+      ".jsx": "javascript",
+      // TypeScript
+      ".ts": "typescript",
+      ".tsx": "typescript",
+      // Python
+      ".py": "python",
+      // Java
+      ".java": "java",
+      // Ruby
+      ".rb": "ruby",
+      // PHP
+      ".php": "php",
+      // C/C++
+      ".c": "c",
+      ".cpp": "cpp",
+      ".h": "cpp",
+      // C#
+      ".cs": "csharp",
+      // Go
+      ".go": "go",
+      // Rust
+      ".rs": "rust",
+      // Swift
+      ".swift": "swift",
+      // Kotlin
+      ".kt": "kotlin",
+      // HTML
+      ".html": "html",
+      ".htm": "html",
+      // CSS
+      ".css": "css",
+      ".scss": "scss",
+      ".sass": "sass",
+      ".less": "less",
+      // JSON
+      ".json": "json",
+      // YAML
+      ".yml": "yaml",
+      ".yaml": "yaml",
+      // Markdown
+      ".md": "markdown",
+      ".markdown": "markdown",
+      // Shell
+      ".sh": "bash",
+      ".bash": "bash",
+      // SQL
+      ".sql": "sql",
+    };
+
+    return languageMap[fileExt] || "plaintext";
+  }
+
+  /**
+   * 文字列の優先度をFeedbackPriority型にマッピング
+   */
+  private mapPriority(priorityStr: string): FeedbackPriority {
+    switch (priorityStr.toLowerCase()) {
+      case "high":
+        return FeedbackPriority.HIGH;
+      case "low":
+        return FeedbackPriority.LOW;
+      case "medium":
+      default:
+        return FeedbackPriority.MEDIUM;
+    }
+  }
+
+  /**
+   * コード提出に対してAIレビューを実行（従来の方法）
+   */
+  async reviewCode(submission: CodeSubmission): Promise<void> {
+    try {
+      console.log(`Reviewing code submission ${submission.id}...`);
+
+      // コードレビューを実行
+      const feedbacks = await this.analyzeSubmissionCode(submission);
+
+      // フィードバックをデータベースに保存
+      const feedbackService = new FeedbackService();
+      for (const feedback of feedbacks) {
+        await feedbackService.createFeedback(feedback);
+      }
+
+      // 提出ステータスを更新
+      const submissionService = new SubmissionService();
+      await submissionService.updateSubmissionStatus(
+        submission.id,
+        SubmissionStatus.REVIEWED
+      );
+
+      console.log(`Review completed for submission ${submission.id}`);
+    } catch (error) {
+      console.error(`Error reviewing code submission ${submission.id}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * コード提出を分析してフィードバックを生成
+   */
+  private async analyzeSubmissionCode(
+    submission: CodeSubmission
+  ): Promise<Partial<Feedback>[]> {
+    // コード内容とメタデータを取得
+    const code = submission.code_content;
+    const expectation = submission.expectation || "";
+
+    // エンベディング作成
+    try {
+      const codeEmbeddingService = new CodeEmbeddingService();
+      await codeEmbeddingService.createEmbedding(submission);
+    } catch (embeddingError) {
+      console.warn(`Warning: Failed to create embeddings: ${embeddingError}`);
+    }
+
+    // プロンプトテンプレートを作成
+    const promptTemplate = PromptTemplate.fromTemplate(`
+      あなたはエキスパートプログラマーとして、新入社員のコード学習を支援する任務を負っています。
+      以下のコードを分析し、問題点を特定してください。ただし、具体的な解決策は提供せず、
+      学習を促進するヒントと公式ドキュメントへの参照を提供してください。
     
-      ## 現在のファイル内容
+      コード:
       \`\`\`
       {code}
       \`\`\`
     
-      ## レビュー指示
-      1. 主に「変更された部分」に焦点を当ててレビューしてください
-      2. コードの品質、可読性、保守性、セキュリティ、パフォーマンスの観点から「何が良くないか」のみを指摘してください
-      3. 解決策は直接提供せず、問題の本質を理解できるヒントを提供してください
-      4. Git Diffの行番号を参照して、問題のある箇所を具体的に示してください
-      5. 各問題に関連する公式ドキュメントやベストプラクティスガイドへの具体的なURLを必ず含めてください
-      6. 優先度を適切に設定してください（high: 重大な問題、medium: 改善すべき問題、low: 小さな提案）
+      {expectation}
+    
+      以下の観点を中心にコードレビューを実施してください。
+    
+      1. コードの構造と設計
+         - コードの構成、関数分割、再利用性などに関する問題点
+         - 「何が良くないか」のみを指摘し、具体的な修正方法は提示しない
+    
+      2. 一般的なベストプラクティス
+         - 命名規則、コードの可読性、保守性に関する問題点
+         - コーディング標準やパターンからの逸脱
+         - セキュリティ、パフォーマンス、エラーハンドリングの問題
+    
+      3. 教育的アプローチ
+         - 各問題点について、なぜそれが問題なのかを説明
+         - 学習者が自ら解決策を見つけられるヒントを提供
+         - 関連する公式ドキュメントやベストプラクティスガイドへの具体的なURLを含める
     
       結果は以下の形式で返してください：
-      - コードに問題がある場合：問題点とヒント、参考URLを含むJSON配列
-      - コードが十分に優れている場合：空の配列（[]）
-    
-      各問題点のJSONフォーマット:
-      \`\`\`json
       [
         {{
           "problem_point": "問題点の簡潔な説明",
@@ -302,83 +790,105 @@ export class AIService {
         }},
         ...
       ]
-      \`\`\`
-    
-      注意: 
-      - コードに重大な問題がない場合は、空の配列を返してください
-      - 必ず参考になる公式ドキュメントの具体的なURLを含めてください（トップページだけでなく、該当する詳細ページ）
-      - 学習者が自ら考え、解決策を見つけられるようなヒントを心がけてください
     `);
 
-    // Execute the prompt
-    const parser = new StringOutputParser();
-    const chain = promptTemplate.pipe(this.model).pipe(parser);
+    // 期待値がある場合は追加
+    const expectationText = expectation
+      ? `開発者が期待する動作や結果：\n${expectation}`
+      : "特に期待する動作の説明はありません。";
 
+    // プロンプトを実行
+    const chain = promptTemplate.pipe(this.model).pipe(this.outputParser);
     const result = await chain.invoke({
-      code,
-      diff: diff || "差分情報は利用できません",
-      filePath: context.filePath,
-      pullRequestId: context.pullRequestId.toString(),
-      projectKey: context.projectKey,
-      repoName: context.repoName,
+      code: code,
+      expectation: expectationText,
     });
 
-    // レスポンスを処理
     try {
-      const cleanedResult = result
-        .replace(/```(json)?\s*/, "")
-        .replace(/```$/, "")
-        .trim();
+      // 結果からJSONを抽出
+      let cleanedResult = result.trim();
 
+      // JSONの開始と終了を探す
+      const jsonStartIndex = cleanedResult.indexOf("[");
+      const jsonEndIndex = cleanedResult.lastIndexOf("]");
+
+      if (
+        jsonStartIndex !== -1 &&
+        jsonEndIndex !== -1 &&
+        jsonEndIndex > jsonStartIndex
+      ) {
+        // JSONオブジェクトのみを抽出
+        cleanedResult = cleanedResult.substring(
+          jsonStartIndex,
+          jsonEndIndex + 1
+        );
+      } else {
+        // マークダウンのコードブロックを削除
+        cleanedResult = cleanedResult
+          .replace(/```json\s*/g, "")
+          .replace(/```\s*$/g, "")
+          .trim();
+      }
+
+      // 結果をパース
       const feedbacks = JSON.parse(cleanedResult);
 
-      // フィードバックがない場合のハンドリング
+      // 空配列の場合は良好なコードのフィードバックを返す
       if (feedbacks.length === 0) {
         return [
           {
-            problem_point: "コードは良好です",
+            submission_id: submission.id,
+            problem_point: "優れたコード",
             suggestion:
-              "このファイルの変更は全体的に良好で、重大な改善点は見つかりませんでした。",
+              "コードは全体的に良好で、重大な改善点は見つかりませんでした。素晴らしい仕事です！",
             priority: FeedbackPriority.LOW,
             line_number: undefined,
-            file_path: context.filePath,
           },
         ];
       }
 
-      // フィードバックをマッピング (ReviewFeedback 型を明示的に指定)
+      // フィードバックをマッピング
       return feedbacks.map((feedback: any) => ({
+        submission_id: submission.id,
         problem_point: feedback.problem_point,
         suggestion: feedback.suggestion,
         priority: this.mapPriority(feedback.priority),
         line_number:
           feedback.line_number === null ? undefined : feedback.line_number,
-        file_path: context.filePath,
-      })) as ReviewFeedback[];
+        reference_url: feedback.reference_url,
+      }));
     } catch (error) {
       console.error("Failed to parse AI response:", error);
       console.log("Raw response:", result);
 
-      // エラー時のフォールバック
+      // エラー時はデフォルトのフィードバックを返す
       return [
         {
-          problem_point: `${context.filePath} のレビュー中にエラーが発生しました`,
+          submission_id: submission.id,
+          problem_point: "コードレビューの分析中にエラーが発生しました",
           suggestion: "システム管理者に連絡してください。",
           priority: FeedbackPriority.MEDIUM,
           line_number: undefined,
-          file_path: context.filePath,
         },
       ];
     }
   }
 
   /**
-   * ユーザーの質問に対する応答を生成（既存メソッド）
+   * ユーザーの質問に対する応答を生成
    */
   async getResponse(
     userMessage: string,
     reviewId: number,
-    context: ChatContext
+    context: {
+      reviewTitle?: string;
+      codeContent?: string;
+      feedbacks?: Array<{
+        problem_point: string;
+        suggestion: string;
+        priority: string;
+      }>;
+    }
   ): Promise<string> {
     try {
       // プロンプトテンプレートを作成
@@ -445,190 +955,6 @@ export class AIService {
     } catch (error) {
       console.error("AI Assistant error:", error);
       return "申し訳ありません、エラーが発生しました。もう一度お試しください。";
-    }
-  }
-
-  /**
-   * 文字列の優先度をFeedbackPriority型にマッピング
-   */
-  private mapPriority(priorityStr: string): FeedbackPriority {
-    switch (priorityStr.toLowerCase()) {
-      case "high":
-        return FeedbackPriority.HIGH;
-      case "low":
-        return FeedbackPriority.LOW;
-      case "medium":
-      default:
-        return FeedbackPriority.MEDIUM;
-    }
-  }
-
-  /**
-   * コード提出に対してAIレビューを実行（従来の方法 - 後方互換性のため）
-   *
-   * 注: このメソッドは ReviewQueueService との互換性のために維持しています
-   * 新しい実装では reviewPullRequest メソッドを使用することを推奨します
-   */
-  async reviewCode(submission: CodeSubmission): Promise<void> {
-    try {
-      console.log(`Reviewing code submission ${submission.id}...`);
-
-      // 新しい方法でコードレビューロジックを実装
-      const feedbacks = await this.analyzeSubmissionCode(submission);
-
-      // フィードバックをデータベースに保存
-      const feedbackService = new FeedbackService();
-      for (const feedback of feedbacks) {
-        await feedbackService.createFeedback(feedback);
-      }
-
-      // 提出ステータスを更新
-      const submissionService = new SubmissionService();
-      await submissionService.updateSubmissionStatus(
-        submission.id,
-        SubmissionStatus.REVIEWED
-      );
-
-      console.log(`Review completed for submission ${submission.id}`);
-    } catch (error) {
-      console.error(`Error reviewing code submission ${submission.id}:`, error);
-      throw error;
-    }
-  }
-
-  /**
-   * コード提出を分析してフィードバックを生成（内部ヘルパーメソッド）
-   */
-  private async analyzeSubmissionCode(
-    submission: CodeSubmission
-  ): Promise<Partial<Feedback>[]> {
-    // コード内容とメタデータを取得
-    const code = submission.code_content;
-    const expectation = submission.expectation || "";
-
-    // エンベディング作成（将来の類似検索のため）
-    try {
-      const codeEmbeddingService = new CodeEmbeddingService();
-      await codeEmbeddingService.createEmbedding(submission);
-    } catch (embeddingError) {
-      console.warn(`Warning: Failed to create embeddings: ${embeddingError}`);
-      // エンベディング作成に失敗しても処理を続行
-    }
-
-    // プロンプトテンプレートを作成
-    const promptTemplate = PromptTemplate.fromTemplate(`
-      あなたはエキスパートプログラマーとして、新入社員のコード学習を支援する任務を負っています。
-      以下のコードを分析し、問題点を特定してください。ただし、具体的な解決策は提供せず、
-      学習を促進するヒントと公式ドキュメントへの参照を提供してください。
-    
-      コード:
-      \`\`\`
-      {code}
-      \`\`\`
-    
-      {expectation}
-    
-      以下の観点を中心にコードレビューを実施してください。
-    
-      1. コードの構造と設計
-         - コードの構成、関数分割、再利用性などに関する問題点
-         - 「何が良くないか」のみを指摘し、具体的な修正方法は提示しない
-    
-      2. 一般的なベストプラクティス
-         - 命名規則、コードの可読性、保守性に関する問題点
-         - コーディング標準やパターンからの逸脱
-         - セキュリティ、パフォーマンス、エラーハンドリングの問題
-    
-      3. 教育的アプローチ
-         - 各問題点について、なぜそれが問題なのかを説明
-         - 学習者が自ら解決策を見つけられるヒントを提供
-         - 関連する公式ドキュメントやベストプラクティスガイドへの具体的なURLを含める
-    
-      結果は以下の形式で返してください：
-      - コードに問題がある場合：問題点とヒント、参考URLを含むJSON配列
-      - コードが十分に優れている場合：空の配列（[]）
-    
-      各問題点のJSONフォーマット:
-      \`\`\`json
-      [
-        {{
-          "problem_point": "問題点の簡潔な説明",
-          "suggestion": "問題の本質を理解するためのヒントと学習のポイント（具体的な解決策は含めない）",
-          "reference_url": "関連する公式ドキュメントまたはベストプラクティスガイドの具体的なURL",
-          "priority": "high/medium/lowのいずれか",
-          "line_number": 該当する行番号または null
-        }},
-        ...
-      ]
-      \`\`\`
-    
-      注意: 
-      - 必ず参考になる公式ドキュメントの具体的なURLを含めてください（トップページだけでなく、該当する詳細ページ）
-      - 学習者が自ら考え、解決策を見つけられるようなヒントを心がけてください
-      - 解決策を直接示すのではなく、考え方や方向性を示唆するアプローチを取ってください
-    `);
-
-    // 期待値がある場合は追加情報としてプロンプトに含める
-    const expectationText = expectation
-      ? `開発者が期待する動作や結果：\n${expectation}`
-      : "特に期待する動作の説明はありません。";
-
-    // プロンプトを実行
-    const parser = new StringOutputParser();
-    const chain = promptTemplate.pipe(this.model).pipe(parser);
-
-    const result = await chain.invoke({
-      code: code,
-      expectation: expectationText,
-    });
-
-    try {
-      // 結果の不要な文字を削除
-      const cleanedResult = result
-        .replace(/```(json)?\s*/, "")
-        .replace(/```$/, "")
-        .trim();
-
-      // 結果をパース
-      const feedbacks = JSON.parse(cleanedResult);
-
-      // フィードバックがない（空の配列）の場合は、良好なコードのフィードバックを返す
-      if (feedbacks.length === 0) {
-        return [
-          {
-            submission_id: submission.id,
-            problem_point: "優れたコード",
-            suggestion:
-              "コードは全体的に良好で、重大な改善点は見つかりませんでした。素晴らしい仕事です！",
-            priority: FeedbackPriority.LOW,
-            line_number: undefined,
-          },
-        ];
-      }
-
-      // フィードバックをマッピング
-      return feedbacks.map((feedback: any) => ({
-        submission_id: submission.id,
-        problem_point: feedback.problem_point,
-        suggestion: feedback.suggestion,
-        priority: this.mapPriority(feedback.priority),
-        line_number:
-          feedback.line_number === null ? undefined : feedback.line_number,
-      }));
-    } catch (error) {
-      console.error("Failed to parse AI response:", error);
-      console.log("Raw response:", result);
-
-      // エラー時はデフォルトのフィードバックを返す
-      return [
-        {
-          submission_id: submission.id,
-          problem_point: "コードレビューの分析中にエラーが発生しました",
-          suggestion: "システム管理者に連絡してください。",
-          priority: FeedbackPriority.MEDIUM,
-          line_number: undefined,
-        },
-      ];
     }
   }
 }

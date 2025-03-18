@@ -105,6 +105,20 @@ export class BacklogRepositoryService {
     });
   }
 
+  // プロジェクトキーとリポジトリ名から情報を取得
+  async getRepositoryByDetails(
+    projectKey: string,
+    repositoryName: string
+  ): Promise<BacklogRepository | null> {
+    return this.repositoryRepository.findOne({
+      where: {
+        project_key: projectKey,
+        repository_name: repositoryName,
+        is_active: true,
+      },
+    });
+  }
+
   /**
    * リポジトリ情報を更新
    */

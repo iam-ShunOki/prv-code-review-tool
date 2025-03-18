@@ -3,8 +3,12 @@ import { AppDataSource } from "../index";
 import { Review, ReviewStatus } from "../models/Review";
 import { User, UserRole } from "../models/User";
 import { CodeSubmission, SubmissionStatus } from "../models/CodeSubmission";
+import { FeedbackPriority } from "../models/Feedback";
 import { BacklogService } from "./BacklogService";
 import { ReviewQueueService } from "./ReviewQueueService";
+import { AIService } from "./AIService";
+import { FeedbackService } from "./FeedbackService";
+import { ReviewFeedbackSenderService } from "./ReviewFeedbackSenderService";
 import { SubmissionService } from "./SubmissionService";
 import { EntityManager, Repository } from "typeorm";
 
@@ -196,33 +200,86 @@ export class AutomaticReviewCreator {
 
       // トランザクション完了後にキューに追加（遅延付き）
       if (submissionId) {
-        // 保存の確認のため少し待機
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        try {
+          console.log(`Starting direct AI review for PR #${prData.number}`);
 
-        // 提出が存在することを確認
-        const submission = await this.submissionService.getSubmissionById(
-          submissionId
-        );
+          // AIServiceを初期化
+          const aiService = new AIService();
 
-        if (submission) {
+          // 直接プルリクエストレビューを実行
+          const reviewFeedbacks = await aiService.reviewPullRequest(
+            prData.project,
+            prData.repository,
+            prData.number
+          );
+
           console.log(
-            `Verified submission #${submissionId} exists, adding to review queue`
+            `Generated ${reviewFeedbacks.length} feedbacks for PR #${prData.number}`
           );
-          await ReviewQueueService.getInstance().addToQueue(submissionId);
-          console.log(`Added submission #${submissionId} to review queue`);
-        } else {
+
+          // フィードバックをデータベースに保存
+          const feedbackService = new FeedbackService();
+          for (const feedback of reviewFeedbacks) {
+            await feedbackService.createFeedback({
+              submission_id: submissionId,
+              problem_point: feedback.problem_point,
+              suggestion: feedback.suggestion,
+              priority: feedback.priority,
+              line_number: feedback.line_number,
+              reference_url: feedback.reference_url, // もし存在する場合
+            });
+          }
+
+          // 提出のステータスを更新
+          const submissionService = new SubmissionService();
+          await submissionService.updateSubmissionStatus(
+            submissionId,
+            SubmissionStatus.REVIEWED
+          );
+
+          console.log(
+            `Review completed and feedbacks saved for PR #${prData.number}`
+          );
+
+          // オプション: BacklogPRにコメントを送信（すぐに結果を返す場合）
+          try {
+            const reviewFeedbackSender = new ReviewFeedbackSenderService();
+            await reviewFeedbackSender.sendReviewFeedbackToPullRequest(
+              savedReview.id
+            );
+          } catch (sendError) {
+            console.error(
+              `Error sending feedback to PR #${prData.number}:`,
+              sendError
+            );
+            // 送信エラーは無視して処理を継続
+          }
+        } catch (reviewError) {
           console.error(
-            `Failed to find submission #${submissionId} after saving - CRITICAL ERROR`
+            `Error performing AI review for PR #${prData.number}:`,
+            reviewError
           );
-          throw new Error(`Submission #${submissionId} not found after save`);
+
+          // エラー時もDBに記録
+          const feedbackService = new FeedbackService();
+          await feedbackService.createFeedback({
+            submission_id: submissionId,
+            problem_point: "レビュー処理中にエラーが発生しました",
+            suggestion: `エラー: ${
+              reviewError instanceof Error
+                ? reviewError.message
+                : String(reviewError)
+            }。システム管理者に連絡してください。`,
+            priority: FeedbackPriority.MEDIUM,
+          });
+
+          // エラー時も提出ステータスを更新
+          const submissionService = new SubmissionService();
+          await submissionService.updateSubmissionStatus(
+            submissionId,
+            SubmissionStatus.REVIEWED
+          );
         }
-      } else {
-        console.error(
-          `No submission ID returned from transaction - CRITICAL ERROR`
-        );
-        throw new Error(
-          `Failed to create submission for review #${savedReview.id}`
-        );
       }
 
       return savedReview;
@@ -311,6 +368,9 @@ export class AutomaticReviewCreator {
     console.log(`Diff data type: ${typeof diffData}`);
     if (typeof diffData === "object") {
       console.log(`Diff data keys: ${Object.keys(diffData).join(", ")}`);
+      console.log(
+        `変更されたファイル: ${JSON.stringify(diffData.changedFiles)}`
+      );
     }
 
     // すでに文字列の場合はそのまま返す

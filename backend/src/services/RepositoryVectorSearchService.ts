@@ -223,6 +223,83 @@ export class RepositoryVectorSearchService {
     return documents;
   }
 
+  // 差分コードに関連する類似コードを検索するメソッド
+  async searchSimilarCodeForDiff(
+    collectionName: string,
+    diffContent: string,
+    limit: number = 5
+  ): Promise<{ document: Document; score: number }[]> {
+    try {
+      // 差分から検索用のクリーンなコードを抽出（+/-などの記号を除去）
+      const cleanedCode = this.extractCodeFromDiff(diffContent);
+
+      // 類似度検索を実行
+      return await this.searchSimilarCode(
+        collectionName,
+        cleanedCode.content,
+        limit
+      );
+    } catch (error) {
+      console.error(
+        `Error searching similar code for diff in ${collectionName}:`,
+        error
+      );
+      return [];
+    }
+  }
+
+  // 改善されたdiffからのコード抽出関数
+  private extractCodeFromDiff(diffText: string): {
+    content: string;
+    filePath: string | null;
+  } {
+    try {
+      // diffのヘッダー部分から実際のファイル名を抽出
+      let filePath = null;
+      const filePathMatch = diffText.match(/\+\+\+ b\/(.*?)$/m);
+      if (
+        filePathMatch &&
+        filePathMatch[1] &&
+        filePathMatch[1] !== "/dev/null"
+      ) {
+        filePath = filePathMatch[1];
+      }
+
+      // diff行から実際のコード内容だけを抽出する
+      const codeLines: string[] = [];
+      const diffLines = diffText.split("\n");
+
+      // チャンク見出し (@@) 以降を探す
+      let inCodeSection = false;
+      for (const line of diffLines) {
+        if (line.startsWith("@@")) {
+          inCodeSection = true;
+          continue; // チャンク見出し行はスキップ
+        }
+
+        if (inCodeSection) {
+          // 追加行 (+で始まる) から+を除去してコードとして追加
+          if (line.startsWith("+")) {
+            codeLines.push(line.substring(1));
+          }
+          // 削除行 (-で始まる) はスキップ
+        }
+      }
+
+      // 抽出したコード行を結合
+      return {
+        content: codeLines.join("\n"),
+        filePath,
+      };
+    } catch (error) {
+      console.error("Error extracting code from git diff:", error);
+      return {
+        content: "",
+        filePath: null,
+      };
+    }
+  }
+
   /**
    * テキストを複数のチャンクに分割
    */
