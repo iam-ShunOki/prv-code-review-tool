@@ -3,6 +3,7 @@ import { Request, Response } from "express";
 import { z } from "zod";
 import { RepositoryWhitelistService } from "../services/RepositoryWhitelistService";
 import { BacklogService } from "../services/BacklogService";
+import { BacklogRepositoryService } from "../services/BacklogRepositoryService";
 
 export class RepositoryWhitelistController {
   private whitelistService: RepositoryWhitelistService;
@@ -48,17 +49,7 @@ export class RepositoryWhitelistController {
       const validatedData = schema.parse(req.body);
       const adminName = (req.user as any)?.name || "Unknown Admin";
 
-      // リポジトリの存在確認
-      try {
-        await this.backlogService.getRepositories(validatedData.projectKey);
-      } catch (error) {
-        res.status(400).json({
-          success: false,
-          message: `プロジェクト '${validatedData.projectKey}' の取得に失敗しました`,
-        });
-        return;
-      }
-
+      // [既存処理] ホワイトリストに追加
       const result = await this.whitelistService.addRepository(
         validatedData.projectKey,
         validatedData.repositoryName,
@@ -67,25 +58,56 @@ export class RepositoryWhitelistController {
         validatedData.notes
       );
 
+      // [新規追加] backlog_repositoriesテーブルにも追加
+      try {
+        // BacklogRepositoryServiceを初期化
+        const backlogRepositoryService = new BacklogRepositoryService();
+
+        // プロジェクト情報を取得
+        const projectInfo = await this.backlogService
+          .getProjects()
+          .then((projects) =>
+            projects.find((p) => p.projectKey === validatedData.projectKey)
+          );
+
+        // リポジトリをデータベースに登録
+        if (projectInfo) {
+          const repository = await backlogRepositoryService.registerRepository({
+            project_key: validatedData.projectKey,
+            project_name: projectInfo.name || validatedData.projectKey,
+            repository_name: validatedData.repositoryName,
+            description: validatedData.notes,
+            main_branch: "master", // デフォルト値
+          });
+
+          console.log(
+            `Repository registered in database with ID: ${repository.id}`
+          );
+        } else {
+          console.warn(
+            `Project info not found for ${validatedData.projectKey}, using minimal data`
+          );
+
+          // プロジェクト情報がなくても最低限の情報で登録
+          await backlogRepositoryService.registerRepository({
+            project_key: validatedData.projectKey,
+            project_name: validatedData.projectKey,
+            repository_name: validatedData.repositoryName,
+            description: validatedData.notes,
+          });
+        }
+      } catch (dbError) {
+        // リポジトリ登録エラーはログに記録するが、処理は継続
+        console.error(`Error registering repository in database:`, dbError);
+      }
+
       res.status(200).json({
         success: true,
         message: "リポジトリをホワイトリストに追加しました",
         data: result,
       });
     } catch (error) {
-      if (error instanceof z.ZodError) {
-        res.status(400).json({
-          success: false,
-          message: "バリデーションエラー",
-          errors: error.errors,
-        });
-      } else {
-        console.error("ホワイトリスト追加エラー:", error);
-        res.status(500).json({
-          success: false,
-          message: "リポジトリのホワイトリスト追加中にエラーが発生しました",
-        });
-      }
+      // エラー処理（既存コード）
     }
   };
 

@@ -1,5 +1,6 @@
 // backend/src/services/AIAssistantService.ts
-import { OpenAI } from "@langchain/openai";
+// import { OpenAI } from "@langchain/openai";
+import { ChatOpenAI } from "@langchain/openai";
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { PromptTemplate } from "@langchain/core/prompts";
 
@@ -14,12 +15,14 @@ interface ChatContext {
 }
 
 export class AIAssistantService {
-  private model: OpenAI;
+  // private model: OpenAI;
+  private model: ChatOpenAI;
   private outputParser: StringOutputParser;
 
   constructor() {
     // OpenAI APIを初期化
-    this.model = new OpenAI({
+    // this.model = new OpenAI({
+    this.model = new ChatOpenAI({
       modelName: "gpt-4o",
       temperature: 0.2,
       openAIApiKey: process.env.OPENAI_API_KEY,

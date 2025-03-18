@@ -3,6 +3,7 @@ import { AppDataSource } from "../index";
 import fs from "fs";
 import path from "path";
 import { promisify } from "util";
+import { BacklogRepositoryService } from "./BacklogRepositoryService";
 
 // 設定ファイルのパス
 const CONFIG_DIR = path.join(__dirname, "../../config");
@@ -172,7 +173,64 @@ export class RepositoryWhitelistService {
     }
 
     await this.saveWhitelist();
+
+    // [新規追加] バックグラウンドでベクトル化を開始
+    this.triggerBackgroundVectorization(projectKey, repositoryName).catch(
+      (error) =>
+        console.error(
+          `Background vectorization error for ${projectKey}/${repositoryName}:`,
+          error
+        )
+    );
+
     return newEntry;
+  }
+
+  /**
+   * バックグラウンドでベクトル化処理を開始
+   */
+  private async triggerBackgroundVectorization(
+    projectKey: string,
+    repositoryName: string
+  ): Promise<void> {
+    try {
+      // まず backlog_repositories テーブルにリポジトリが登録されているか確認
+      const backlogRepositoryService = new BacklogRepositoryService();
+      let repository = await backlogRepositoryService.getRepositoryByDetails(
+        projectKey,
+        repositoryName
+      );
+
+      // 登録されていない場合は新規登録
+      if (!repository) {
+        console.log(
+          `Repository ${projectKey}/${repositoryName} not found in database, registering now`
+        );
+
+        repository = await backlogRepositoryService.registerRepository({
+          project_key: projectKey,
+          project_name: projectKey, // 詳細情報がないのでキーを代用
+          repository_name: repositoryName,
+          description: "Auto-registered from whitelist",
+        });
+      }
+
+      // ベクトル化実行
+      console.log(
+        `Starting vectorization for repository ${repository.id}: ${projectKey}/${repositoryName}`
+      );
+      await backlogRepositoryService.cloneAndVectorizeRepository(repository.id);
+
+      console.log(
+        `Vectorization completed for repository ${projectKey}/${repositoryName}`
+      );
+    } catch (error) {
+      console.error(
+        `Vectorization failed for ${projectKey}/${repositoryName}:`,
+        error
+      );
+      throw error;
+    }
   }
 
   /**

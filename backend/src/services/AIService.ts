@@ -1,5 +1,5 @@
 // backend/src/services/AIService.ts
-import { OpenAI } from "@langchain/openai";
+import { ChatOpenAI } from "@langchain/openai";
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { PromptTemplate } from "@langchain/core/prompts";
 import { Document } from "@langchain/core/documents";
@@ -22,12 +22,12 @@ interface ReviewFeedback {
 }
 
 export class AIService {
-  private model: OpenAI;
+  private model: ChatOpenAI;
   private outputParser: StringOutputParser;
 
   constructor() {
-    // OpenAI APIを初期化
-    this.model = new OpenAI({
+    // ChatOpenAI APIを初期化
+    this.model = new ChatOpenAI({
       modelName: "gpt-4o",
       temperature: 0.2,
       openAIApiKey: process.env.OPENAI_API_KEY,
@@ -130,7 +130,12 @@ export class AIService {
                 }
               );
 
-              allFeedbacks.push(...feedbacks);
+              console.log(
+                `Got ${feedbacks.length} feedbacks for ${actualFilePath}`
+              );
+              if (feedbacks && feedbacks.length > 0) {
+                allFeedbacks.push(...feedbacks);
+              }
             } catch (analysisError) {
               console.error(
                 `Error analyzing file ${actualFilePath}:`,
@@ -187,11 +192,18 @@ export class AIService {
           repoName,
           pullRequestId
         );
-        allFeedbacks.push(...fallbackFeedback);
+
+        if (fallbackFeedback && fallbackFeedback.length > 0) {
+          console.log(`Got ${fallbackFeedback.length} fallback feedbacks`);
+          allFeedbacks.push(...fallbackFeedback);
+        }
       }
+
+      console.log(`Total feedbacks collected: ${allFeedbacks.length}`);
 
       // 何も問題が見つからない場合は良好メッセージを返す
       if (allFeedbacks.length === 0) {
+        console.log("No issues found, adding positive feedback");
         allFeedbacks.push({
           problem_point: "コードレビューで問題は見つかりませんでした",
           suggestion:
@@ -364,6 +376,8 @@ export class AIService {
     // 言語の特定
     const language = this.detectLanguageFromExtension(fileExt);
 
+    console.log(`Analyzing ${language} code for ${context.filePath}`);
+
     // プロンプトテンプレート
     const promptTemplate = PromptTemplate.fromTemplate(`
       あなたはエキスパートプログラマーとして、新入社員のコード学習を支援する任務を負っています。
@@ -394,6 +408,7 @@ export class AIService {
       5. 各問題の優先度を設定してください（high/medium/low）。
       6. 可能な場合は問題がある行番号を特定してください。
       7. 各問題点には関連する公式ドキュメントやベストプラクティスガイドへの具体的なURLを含めてください。
+      8. 何も問題が見つからない場合は、その理由を説明して空の配列を返してください。
       
       結果は以下のJSON形式で返してください（マークダウンなどの追加フォーマットは不要）:
       [
@@ -407,69 +422,107 @@ export class AIService {
       ]
     `);
 
-    // プロンプトを実行
-    const parser = new StringOutputParser();
-    const chain = promptTemplate.pipe(this.model).pipe(parser);
-
-    const result = await chain.invoke({
-      code,
-      language,
-      filePath: context.filePath,
-      pullRequestId: context.pullRequestId.toString(),
-      projectKey: context.projectKey,
-      repoName: context.repoName,
-    });
-
-    // 結果の解析
     try {
-      // JSON部分を抽出
-      let cleanedResult = result.trim();
+      // プロンプトを実行
+      const chain = promptTemplate.pipe(this.model).pipe(this.outputParser);
 
-      // JSON開始と終了を探す
-      const jsonStartIndex = cleanedResult.indexOf("[");
-      const jsonEndIndex = cleanedResult.lastIndexOf("]");
+      console.log("Sending request to AI model...");
+      const result = await chain.invoke({
+        code,
+        language,
+        filePath: context.filePath,
+        pullRequestId: context.pullRequestId.toString(),
+        projectKey: context.projectKey,
+        repoName: context.repoName,
+      });
 
-      if (
-        jsonStartIndex !== -1 &&
-        jsonEndIndex !== -1 &&
-        jsonEndIndex > jsonStartIndex
-      ) {
-        // JSONオブジェクトのみを抽出
-        cleanedResult = cleanedResult.substring(
-          jsonStartIndex,
-          jsonEndIndex + 1
+      console.log(`Received AI response (${result.length} chars)`);
+
+      // 結果の解析
+      try {
+        // JSON部分を抽出
+        let cleanedResult = result.trim();
+
+        // JSON開始と終了を探す
+        const jsonStartIndex = cleanedResult.indexOf("[");
+        const jsonEndIndex = cleanedResult.lastIndexOf("]");
+
+        if (
+          jsonStartIndex !== -1 &&
+          jsonEndIndex !== -1 &&
+          jsonEndIndex > jsonStartIndex
+        ) {
+          // JSONオブジェクトのみを抽出
+          cleanedResult = cleanedResult.substring(
+            jsonStartIndex,
+            jsonEndIndex + 1
+          );
+        } else {
+          // マークダウンのコードブロックを削除
+          cleanedResult = cleanedResult
+            .replace(/```json\s*/g, "")
+            .replace(/```\s*$/g, "")
+            .trim();
+        }
+
+        console.log(
+          `Attempting to parse JSON result: ${cleanedResult.substring(
+            0,
+            100
+          )}...`
         );
-      } else {
-        // マークダウンのコードブロックを削除
-        cleanedResult = cleanedResult
-          .replace(/```json\s*/g, "")
-          .replace(/```\s*$/g, "")
-          .trim();
+
+        // 空の配列または []だけの場合は空の配列を返す
+        if (
+          cleanedResult === "[]" ||
+          cleanedResult.trim() === "" ||
+          jsonStartIndex === -1
+        ) {
+          console.log("Empty array or no valid JSON found");
+          return [];
+        }
+
+        const feedbacks = JSON.parse(cleanedResult);
+        console.log(
+          `Successfully parsed JSON, found ${feedbacks.length} feedbacks`
+        );
+
+        // フィードバックをマッピング
+        return feedbacks.map((feedback: any) => ({
+          problem_point: feedback.problem_point,
+          suggestion: feedback.suggestion,
+          priority: this.mapPriority(feedback.priority),
+          line_number:
+            feedback.line_number === null ? undefined : feedback.line_number,
+          file_path: context.filePath,
+          reference_url: feedback.reference_url,
+        }));
+      } catch (parseError) {
+        console.error("Failed to parse AI response:", parseError);
+        console.log("Raw response:", result);
+
+        // エラー時のフォールバック
+        return [
+          {
+            problem_point: `${context.filePath} のレビュー中にエラーが発生しました`,
+            suggestion:
+              "AIからの応答を解析できませんでした。管理者に報告してください。",
+            priority: FeedbackPriority.MEDIUM,
+            line_number: undefined,
+            file_path: context.filePath,
+            reference_url: undefined,
+          },
+        ];
       }
-
-      const feedbacks = JSON.parse(cleanedResult);
-
-      // フィードバックをマッピング
-      return feedbacks.map((feedback: any) => ({
-        problem_point: feedback.problem_point,
-        suggestion: feedback.suggestion,
-        priority: this.mapPriority(feedback.priority),
-        line_number:
-          feedback.line_number === null ? undefined : feedback.line_number,
-        file_path: context.filePath,
-        reference_url: feedback.reference_url,
-      }));
     } catch (error) {
-      console.error("Failed to parse AI response:", error);
-      console.log("Raw response:", result);
-
-      // エラー時のフォールバック
+      console.error(`Error calling AI model:`, error);
       return [
         {
-          problem_point: `${context.filePath} のレビュー中にエラーが発生しました`,
-          suggestion:
-            "AIからの応答を解析できませんでした。管理者に報告してください。",
-          priority: FeedbackPriority.MEDIUM,
+          problem_point: `AI処理エラー: ${context.filePath}`,
+          suggestion: `AIモデルの呼び出し中にエラーが発生しました: ${
+            error instanceof Error ? error.message : "Unknown error"
+          }`,
+          priority: FeedbackPriority.HIGH,
           line_number: undefined,
           file_path: context.filePath,
           reference_url: undefined,
@@ -512,12 +565,13 @@ export class AIService {
         }
 
         // diffTextを追加（長すぎる場合は切り詰め）
-        diffText += JSON.stringify(diffData).substring(0, 10000);
+        diffText += JSON.stringify(diffData).substring(0, 5000);
       } else if (typeof diffData === "string") {
-        diffText = diffData.substring(0, 10000);
+        diffText = diffData.substring(0, 5000);
       }
 
       if (!diffText || diffText.trim() === "") {
+        console.log("No diff text to analyze");
         return [
           {
             problem_point: "レビュー対象のコードが見つかりませんでした",
@@ -530,6 +584,8 @@ export class AIService {
           },
         ];
       }
+
+      console.log(`Generated diff text summary (${diffText.length} chars)`);
 
       // AIに直接diffTextを渡してレビューを生成
       const promptTemplate = PromptTemplate.fromTemplate(`
@@ -560,57 +616,70 @@ export class AIService {
         ]
       `);
 
-      // プロンプト実行
-      const parser = new StringOutputParser();
-      const chain = promptTemplate.pipe(this.model).pipe(parser);
-
-      const result = await chain.invoke({
-        projectKey,
-        repoName,
-        pullRequestId: pullRequestId.toString(),
-        diffText,
-      });
-
-      // 結果の解析
       try {
+        // プロンプト実行
+        const parser = new StringOutputParser();
+        const chain = promptTemplate.pipe(this.model).pipe(parser);
+
+        console.log("Sending fallback request to AI model...");
+        const result = await chain.invoke({
+          projectKey,
+          repoName,
+          pullRequestId: pullRequestId.toString(),
+          diffText,
+        });
+
+        console.log(`Received fallback AI response (${result.length} chars)`);
+
         // JSONの開始と終了を探して抽出
         const jsonStart = result.indexOf("[");
         const jsonEnd = result.lastIndexOf("]") + 1;
 
         if (jsonStart >= 0 && jsonEnd > jsonStart) {
           const jsonContent = result.substring(jsonStart, jsonEnd);
-          const feedbacks = JSON.parse(jsonContent);
+          console.log(`Extracted JSON content (${jsonContent.length} chars)`);
 
-          console.log(
-            `\n\n ====最終的なフィードバックです。==== \n\n ${feedbacks}`
-          );
+          try {
+            const feedbacks = JSON.parse(jsonContent);
+            console.log(`Parsed ${feedbacks.length} fallback feedbacks`);
 
-          // 結果をマッピング
-          return feedbacks.map((feedback: any) => ({
-            problem_point: feedback.problem_point,
-            suggestion: feedback.suggestion,
-            priority: this.mapPriority(feedback.priority),
-            line_number: undefined,
-            file_path: "unspecified.file",
-            reference_url: feedback.reference_url,
-          }));
+            // 結果をマッピング
+            return feedbacks.map((feedback: any) => ({
+              problem_point: feedback.problem_point,
+              suggestion: feedback.suggestion,
+              priority: this.mapPriority(feedback.priority),
+              line_number: undefined,
+              file_path: "fallback.analysis",
+              reference_url: feedback.reference_url || undefined,
+            }));
+          } catch (jsonError) {
+            console.error(
+              "Error parsing JSON from fallback response:",
+              jsonError
+            );
+            console.log("JSON content:", jsonContent);
+            throw jsonError;
+          }
+        } else {
+          console.log("No valid JSON found in fallback response");
+          throw new Error("No valid JSON found in fallback response");
         }
       } catch (parseError) {
-        console.error("Error parsing fallback review:", parseError);
-      }
+        console.error("Error in fallback review generation:", parseError);
 
-      // 最終フォールバック
-      return [
-        {
-          problem_point: "コード変更の詳細な分析ができませんでした",
-          suggestion:
-            "提出されたコードに明確な変更が見つからないか、解析に失敗しました。より明確なコード変更をプルリクエストに含めてください。",
-          priority: FeedbackPriority.MEDIUM,
-          line_number: undefined,
-          file_path: "analysis.error",
-          reference_url: undefined,
-        },
-      ];
+        // 最終フォールバック
+        return [
+          {
+            problem_point: "コード変更の詳細な分析ができませんでした",
+            suggestion:
+              "提出されたコードに明確な変更が見つからないか、解析に失敗しました。より明確なコード変更をプルリクエストに含めてください。",
+            priority: FeedbackPriority.MEDIUM,
+            line_number: undefined,
+            file_path: "analysis.error",
+            reference_url: undefined,
+          },
+        ];
+      }
     } catch (error) {
       console.error("Failed to generate fallback review:", error);
       return [
@@ -691,7 +760,7 @@ export class AIService {
    * 文字列の優先度をFeedbackPriority型にマッピング
    */
   private mapPriority(priorityStr: string): FeedbackPriority {
-    switch (priorityStr.toLowerCase()) {
+    switch (priorityStr?.toLowerCase()) {
       case "high":
         return FeedbackPriority.HIGH;
       case "low":
@@ -749,6 +818,8 @@ export class AIService {
     } catch (embeddingError) {
       console.warn(`Warning: Failed to create embeddings: ${embeddingError}`);
     }
+
+    console.log(`Analyzing submission ${submission.id}`);
 
     // プロンプトテンプレートを作成
     const promptTemplate = PromptTemplate.fromTemplate(`

@@ -3,6 +3,7 @@ import { Request, Response } from "express";
 import { z } from "zod";
 import { BacklogRepositoryService } from "../services/BacklogRepositoryService";
 import { BacklogService } from "../services/BacklogService";
+import { RepositoryWhitelistService } from "../services/RepositoryWhitelistService";
 
 export class AdminRepositoryController {
   private backlogRepositoryService: BacklogRepositoryService;
@@ -82,6 +83,27 @@ export class AdminRepositoryController {
       const repository = await this.backlogRepositoryService.registerRepository(
         validatedData
       );
+
+      // [新規追加] ホワイトリストにも追加
+      try {
+        const whitelistService = RepositoryWhitelistService.getInstance();
+        const adminName = (req.user as any)?.name || "Unknown Admin";
+
+        await whitelistService.addRepository(
+          validatedData.project_key,
+          validatedData.repository_name,
+          true, // デフォルトで自動返信を有効に
+          adminName,
+          validatedData.description
+        );
+
+        console.log(
+          `Repository added to whitelist: ${validatedData.project_key}/${validatedData.repository_name}`
+        );
+      } catch (whitelistError) {
+        // ホワイトリスト登録エラーはログに記録するが、処理は継続
+        console.error(`Error adding repository to whitelist:`, whitelistError);
+      }
 
       res.status(201).json({
         success: true,

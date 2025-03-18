@@ -1,8 +1,8 @@
 // backend/src/services/RepositoryVectorSearchService.ts
 import { AppDataSource } from "../index";
 import { Document } from "@langchain/core/documents";
-import { OpenAIEmbeddings } from "@langchain/openai";
 import { Chroma } from "@langchain/community/vectorstores/chroma";
+import { OpenAIEmbeddings } from "@langchain/openai";
 import { BacklogService } from "./BacklogService";
 import { CodeEmbedding } from "../models/CodeEmbedding";
 import { CodeSubmission } from "../models/CodeSubmission";
@@ -301,6 +301,108 @@ export class RepositoryVectorSearchService {
   }
 
   /**
+   * コードスニペットに類似したコードをベクトルDBから検索
+   */
+  /**
+   * コードスニペットに類似したコードをベクトルDBから検索
+   */
+  async searchSimilarCodeBySnippet(
+    collectionName: string,
+    codeSnippet: string,
+    limit: number = 3,
+    excludeExactMatches: boolean = true
+  ): Promise<{ content: string; metadata: any; score: number }[]> {
+    try {
+      console.log(`Searching similar code in collection: ${collectionName}`);
+
+      // ベクトルストアを初期化
+      const vectorStore = await this.initializeVectorStore(collectionName);
+
+      // v0.3では、単純に similaritySearchWithScore を使用 (フィルタなし)
+      const results = await vectorStore.similaritySearchWithScore(
+        codeSnippet,
+        limit * 2
+      );
+
+      // 結果を整形
+      let processedResults = results.map(([doc, score]) => ({
+        content: doc.pageContent,
+        metadata: doc.metadata,
+        score: score,
+      }));
+
+      // 完全一致や非常に類似度の高いものを除外
+      if (excludeExactMatches) {
+        processedResults = processedResults.filter(
+          (item) =>
+            !(item.content.trim() === codeSnippet.trim() || item.score > 0.98)
+        );
+      }
+
+      // スコアでソートして上限数まで返す
+      return processedResults
+        .sort((a, b) => a.score - b.score) // スコアが低いほど類似度が高い
+        .slice(0, limit);
+    } catch (error) {
+      console.error(
+        `Error searching similar code in collection ${collectionName}:`,
+        error
+      );
+      return [];
+    }
+  }
+
+  /**
+   * ファイルパスに関連するコードを検索
+   */
+  async searchSimilarCodeByFilePath(
+    collectionName: string,
+    filePath: string,
+    limit: number = 2
+  ): Promise<{ content: string; metadata: any; score: number }[]> {
+    try {
+      console.log(
+        `Searching by file path for ${filePath} in collection: ${collectionName}`
+      );
+
+      // ベクトルストアを初期化
+      const vectorStore = await this.initializeVectorStore(collectionName);
+
+      // ファイル名を抽出
+      const fileName = path.basename(filePath);
+
+      // v0.3では、まず検索を行い、その後にフィルタリング
+      // フィルタを指定せずに検索を実行
+      const results = await vectorStore.similaritySearch(fileName, limit * 5);
+
+      // 結果を手動でフィルタリング
+      const filteredResults = results.filter((doc) => {
+        // source メタデータがあるか確認
+        if (!doc.metadata || !doc.metadata.source) return false;
+
+        const source = String(doc.metadata.source);
+        // ファイル名を含むものだけをフィルタリング
+        return (
+          source.includes(fileName) || path.basename(source).includes(fileName)
+        );
+      });
+
+      // 整形して返す
+      return filteredResults.slice(0, limit).map((doc) => ({
+        content: doc.pageContent,
+        metadata: doc.metadata,
+        score: 0.5, // 実際のスコアがないため固定値
+      }));
+    } catch (error) {
+      console.error(
+        `Error searching by file path in ${collectionName}:`,
+        error
+      );
+      return [];
+    }
+  }
+
+  /**
    * テキストを複数のチャンクに分割
    */
   private splitContentIntoChunks(content: string, chunkSize: number): string[] {
@@ -329,30 +431,49 @@ export class RepositoryVectorSearchService {
    */
   private async initializeVectorStore(collectionName: string): Promise<Chroma> {
     try {
-      // 既存のコレクションに接続
-      const vectorStore = await Chroma.fromExistingCollection(this.embeddings, {
-        collectionName,
-        url: `http://${process.env.CHROMA_HOST || "localhost"}:${
-          process.env.CHROMA_PORT || "8000"
-        }`,
-      });
-      return vectorStore;
-    } catch (error) {
-      console.log(`Creating new collection: ${collectionName}`);
+      // v0.3でのChroma初期化
+      const chromaUrl = `http://${process.env.CHROMA_HOST || "localhost"}:${
+        process.env.CHROMA_PORT || "8000"
+      }`;
 
-      // コレクションが存在しない場合は新規作成
-      const vectorStore = await Chroma.fromDocuments(
-        [], // 空の配列から作成
-        this.embeddings,
-        {
-          collectionName,
-          url: `http://${process.env.CHROMA_HOST || "localhost"}:${
-            process.env.CHROMA_PORT || "8000"
-          }`,
-        }
+      console.log(
+        `Connecting to Chroma at ${chromaUrl} for collection ${collectionName}`
       );
 
-      return vectorStore;
+      try {
+        // 既存のコレクションへの接続試行
+        return await Chroma.fromExistingCollection(
+          new OpenAIEmbeddings({
+            openAIApiKey: process.env.OPENAI_API_KEY,
+            modelName: "text-embedding-ada-002",
+          }),
+          {
+            collectionName: collectionName,
+            url: chromaUrl,
+          }
+        );
+      } catch (error) {
+        console.log(`Creating new collection: ${collectionName}`);
+
+        // 新規コレクション作成
+        return await Chroma.fromDocuments(
+          [], // 空のドキュメント配列
+          new OpenAIEmbeddings({
+            openAIApiKey: process.env.OPENAI_API_KEY,
+            modelName: "text-embedding-ada-002",
+          }),
+          {
+            collectionName: collectionName,
+            url: chromaUrl,
+          }
+        );
+      }
+    } catch (error) {
+      console.error(
+        `Error initializing vector store for ${collectionName}:`,
+        error
+      );
+      throw error;
     }
   }
 }

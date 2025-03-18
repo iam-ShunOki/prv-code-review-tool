@@ -62,15 +62,27 @@ export class BacklogRepositoryService {
     if (existingRepo) {
       // 既に削除されていたリポジトリの場合は再有効化
       if (!existingRepo.is_active) {
+        console.log(`Re-activating existing repository ${existingRepo.id}`);
         existingRepo.is_active = true;
         existingRepo.status = RepositoryStatus.REGISTERED;
         existingRepo.error_message = "";
         return this.repositoryRepository.save(existingRepo);
       }
-      throw new Error("このリポジトリは既に登録されています");
+      // アクティブなリポジトリの場合は更新
+      console.log(`Updating existing repository ${existingRepo.id}`);
+      existingRepo.project_name = data.project_name;
+      existingRepo.description = data.description || existingRepo.description;
+      existingRepo.main_branch = data.main_branch || existingRepo.main_branch;
+      existingRepo.repository_id =
+        data.repository_id || existingRepo.repository_id;
+
+      return this.repositoryRepository.save(existingRepo);
     }
 
     // 新しいリポジトリを作成
+    console.log(
+      `Creating new repository record for ${data.project_key}/${data.repository_name}`
+    );
     const repository = this.repositoryRepository.create({
       project_key: data.project_key,
       project_name: data.project_name,
@@ -80,10 +92,75 @@ export class BacklogRepositoryService {
       main_branch: data.main_branch || "master",
       status: RepositoryStatus.REGISTERED,
       is_active: true,
-      vectorstore_collection: `backlog_${data.project_key}_${data.repository_name}`,
+      vectorstore_collection:
+        `backlog_${data.project_key}_${data.repository_name}`.replace(
+          /[^a-zA-Z0-9_]/g,
+          "_"
+        ),
     });
 
-    return this.repositoryRepository.save(repository);
+    // リポジトリをデータベースに保存
+    const savedRepository = await this.repositoryRepository.save(repository);
+    console.log(`Repository saved with ID ${savedRepository.id}`);
+
+    // バックグラウンドでベクトル化処理を開始
+    setTimeout(() => {
+      console.log(
+        `Scheduling background vectorization for repository ${savedRepository.id}`
+      );
+      this.cloneAndVectorizeRepository(savedRepository.id)
+        .then(() =>
+          console.log(
+            `Background vectorization completed for repository ${savedRepository.id}`
+          )
+        )
+        .catch((error) =>
+          console.error(
+            `Background vectorization error for repository ${savedRepository.id}:`,
+            error
+          )
+        );
+    }, 2000);
+
+    return savedRepository;
+  }
+
+  /**
+   * バックグラウンドでベクトル化処理を開始
+   */
+  private async triggerBackgroundVectorization(
+    repositoryId: number
+  ): Promise<void> {
+    try {
+      console.log(
+        `Starting background vectorization for repository ${repositoryId}`
+      );
+
+      // 少し遅延を入れてシステムの負荷を分散
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+
+      // ベクトル化実行
+      await this.cloneAndVectorizeRepository(repositoryId);
+
+      console.log(
+        `Background vectorization completed for repository ${repositoryId}`
+      );
+    } catch (error) {
+      console.error(
+        `Background vectorization failed for repository ${repositoryId}:`,
+        error
+      );
+
+      // エラー情報をリポジトリに記録
+      try {
+        await this.updateRepository(repositoryId, {
+          status: RepositoryStatus.FAILED,
+          error_message: error instanceof Error ? error.message : String(error),
+        });
+      } catch (updateError) {
+        console.error(`Failed to update repository status:`, updateError);
+      }
+    }
   }
 
   /**
@@ -105,7 +182,9 @@ export class BacklogRepositoryService {
     });
   }
 
-  // プロジェクトキーとリポジトリ名から情報を取得
+  /**
+   * プロジェクトキーとリポジトリ名からリポジトリ情報を取得
+   */
   async getRepositoryByDetails(
     projectKey: string,
     repositoryName: string
@@ -227,7 +306,8 @@ export class BacklogRepositoryService {
       const apiKey = process.env.BACKLOG_API_KEY || "";
 
       // アクセス情報で認証用URLを構築
-      const gitUrl = `https://${spaceKey}.backlog.jp/git/${projectKey}/${repoName}.git`;
+      // const gitUrl = `https://${spaceKey}.backlog.jp/git/${projectKey}/${repoName}.git`;
+      const gitUrl = `${spaceKey}@${spaceKey}.git.backlog.jp:/${projectKey}/${repoName}.git`;
 
       // クローンコマンドを実行
       const command = `git clone -b ${branch} ${gitUrl} ${tempRepoDir}`;

@@ -118,6 +118,14 @@ export class ReviewFeedbackSenderService {
         latestSubmission
       );
 
+      if (formattedFeedback.includes("このコードに重大な問題は")) {
+        console.log(
+          `\n\n formattedFeedback in ReviewFeedbackSenderService: \n\n ${formattedFeedback}\n\n`
+        );
+        console.log("\n\n失敗しました!!!!!!!!!!!!!!!!!!\n\n");
+        return false;
+      }
+
       // Backlogにコメントを送信
       try {
         console.log(`Sending feedback to PR #${review.backlog_pr_id}`);

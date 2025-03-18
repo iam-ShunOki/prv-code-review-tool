@@ -51,4 +51,5 @@ Thumbs.db
 
 .gitconfig-temp
 
-package-lock.json
+# package-lock.json
+/package-lcok.json

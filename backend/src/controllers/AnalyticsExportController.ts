@@ -443,7 +443,7 @@ export class AnalyticsExportController {
     });
 
     // バッファとして返す
-    return (await workbook.xlsx.writeBuffer()) as Buffer;
+    return (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
   }
 
   /**
