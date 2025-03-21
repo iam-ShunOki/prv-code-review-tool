@@ -1,6 +1,10 @@
 import "reflect-metadata";
 import { DataSource } from "typeorm";
 import { User } from "./models/User";
+import { Project } from "./models/Project";
+import { UserProject } from "./models/UserProject";
+import { UserGroup } from "./models/UserGroup";
+import { UserGroupMember } from "./models/UserGroupMember";
 import { Review } from "./models/Review";
 import { CodeSubmission } from "./models/CodeSubmission";
 import { Feedback } from "./models/Feedback";
@@ -16,6 +20,8 @@ import { AddBacklogRepositoriesTable1625000000500 } from "./migrations/162500000
 import { AddBacklogPrTracking1625000000600 } from "./migrations/1625000000600-AddBacklogPrTracking";
 import { AddFeedbackReferenceUrl1625000000700 } from "./migrations/1625000000700-AddFeedbackReferenceUrl";
 import { AddUsageLimitsAndLogs1625000000800 } from "./migrations/1625000000800-AddUsageLimitsAndLogs";
+import { AddProjectAndGroupManagement1625000000900 } from "./migrations/1625000000900-AddProjectAndGroupManagement";
+import { RemoveLineNumber1625000001000 } from "./migrations/1625000001000-RemoveLineNumber";
 import dotenv from "dotenv";
 import { NotificationSettings } from "./models/NotificationSettings";
 import { BacklogRepository } from "./models/BacklogRepository";
@@ -37,6 +43,10 @@ export const AppDataSource = new DataSource({
   logging: process.env.NODE_ENV === "development",
   entities: [
     User,
+    Project,
+    UserProject,
+    UserGroup,
+    UserGroupMember,
     Review,
     CodeSubmission,
     Feedback,
@@ -59,6 +69,18 @@ export const AppDataSource = new DataSource({
     AddBacklogPrTracking1625000000600,
     AddFeedbackReferenceUrl1625000000700,
     AddUsageLimitsAndLogs1625000000800,
+    AddProjectAndGroupManagement1625000000900,
+    RemoveLineNumber1625000001000,
   ],
   subscribers: [],
+
+  // 接続プール設定の追加
+  poolSize: process.env.TYPEORM_CONNECTION_POOL_SIZE
+    ? parseInt(process.env.TYPEORM_CONNECTION_POOL_SIZE)
+    : 10,
+  connectTimeout: 20000,
+  maxQueryExecutionTime: 10000,
+  cache: {
+    duration: 60000, // キャッシュ期間（ミリ秒）
+  },
 });

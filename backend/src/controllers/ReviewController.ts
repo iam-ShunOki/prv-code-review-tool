@@ -2,12 +2,15 @@
 import { Request, Response } from "express";
 import { z } from "zod";
 import { ReviewService } from "../services/ReviewService";
+import { ProjectService } from "../services/ProjectService"; // 新規追加
 
 export class ReviewController {
   private reviewService: ReviewService;
+  private projectService: ProjectService;
 
   constructor() {
     this.reviewService = new ReviewService();
+    this.projectService = new ProjectService();
   }
 
   /**
@@ -19,6 +22,7 @@ export class ReviewController {
       const reviewSchema = z.object({
         title: z.string().min(3, "タイトルは3文字以上必要です"),
         description: z.string().optional(),
+        project_id: z.number().optional(),
       });
 
       const validatedData = reviewSchema.parse(req.body);
@@ -33,11 +37,40 @@ export class ReviewController {
         return;
       }
 
+      // プロジェクトIDが指定されている場合、存在確認を行う
+      if (validatedData.project_id) {
+        const project = await this.projectService.getProjectById(
+          validatedData.project_id
+        );
+        if (!project) {
+          res.status(404).json({
+            success: false,
+            message: "指定されたプロジェクトが見つかりません",
+          });
+          return;
+        }
+
+        // ユーザーがプロジェクトのメンバーであるか確認
+        const userProjects = await this.projectService.getUserProjects(userId);
+        const isProjectMember = userProjects.some(
+          (p) => p.id === validatedData.project_id
+        );
+
+        if (!isProjectMember) {
+          res.status(403).json({
+            success: false,
+            message: "指定されたプロジェクトにアクセスする権限がありません",
+          });
+          return;
+        }
+      }
+
       // レビュー作成
       const review = await this.reviewService.createReview({
         user_id: userId,
         title: validatedData.title,
         description: validatedData.description || "",
+        project_id: validatedData.project_id,
       });
 
       res.status(201).json({

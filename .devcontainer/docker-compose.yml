@@ -17,7 +17,27 @@ services:
       - MYSQL_DATABASE=codereview
       - CHROMA_HOST=chroma
       - NODE_ENV=development
-      
+    # タイムアウト設定の追加
+    stop_grace_period: 2m
+    # ヘルスチェックの追加
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://localhost:3001/health', res => process.exit(res.statusCode === 200 ? 0 : 1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 1G
 
   mysql:
     image: mysql:8.0
@@ -31,6 +51,14 @@ services:
       - MYSQL_PASSWORD=reviewpassword
     ports:
       - 3306:3306
+    # MySQL設定の最適化
+    command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --max_allowed_packet=128M --innodb_buffer_pool_size=1G --innodb_log_file_size=256M
+    # タイムアウト設定の追加
+    stop_grace_period: 1m
+    deploy:
+      resources:
+        limits:
+          memory: 1G
 
   chroma:
     image: ghcr.io/chroma-core/chroma:latest
@@ -40,8 +68,21 @@ services:
       - ../vector-db/data:/vector-db/data
     environment:
       - PERSIST_DIRECTORY=/vector-db/data
+      # ChromaDBの設定追加
+      - CHROMA_SERVER_AUTH_CREDENTIALS_PROVIDER=chromadb.auth.token.TokenAuthCredentialsProvider
+      - ALLOW_RESET=true
+      - CHROMA_SERVER_AUTH_PROVIDER=token
+      - CHROMA_SERVER_AUTH_TOKEN_TRANSPORT_HEADER=X-Chroma-Token
     ports:
       - 8000:8000
+    # タイムアウト設定の追加
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
 
   phpmyadmin:
     image: phpmyadmin/phpmyadmin
@@ -50,10 +91,17 @@ services:
       - PMA_HOST=mysql
       - PMA_PORT=3306
       - MYSQL_ROOT_PASSWORD=rootpassword
+      - UPLOAD_LIMIT=100M
     ports:
       - 8080:80
     depends_on:
       - mysql
+    # タイムアウト設定の追加
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
 
 volumes:
   mysql-data:

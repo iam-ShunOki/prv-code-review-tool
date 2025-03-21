@@ -24,8 +24,8 @@ export class FeedbackService {
       problem_point: feedbackData.problem_point,
       suggestion: feedbackData.suggestion,
       priority: feedbackData.priority || FeedbackPriority.MEDIUM,
-      line_number: feedbackData.line_number,
       is_resolved: feedbackData.is_resolved || false,
+      reference_url: feedbackData.reference_url,
     };
 
     // 直接リポジトリに渡して保存

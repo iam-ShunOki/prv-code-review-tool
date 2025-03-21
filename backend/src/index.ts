@@ -15,6 +15,45 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// ヘルスチェックエンドポイント
+app.get("/health", (req, res) => {
+  // データベース接続の確認
+  const dbStatus = AppDataSource.isInitialized ? "connected" : "disconnected";
+
+  // メモリ使用量の確認
+  const memoryUsage = process.memoryUsage();
+  const memoryUsageMB = {
+    rss: Math.round(memoryUsage.rss / 1024 / 1024),
+    heapTotal: Math.round(memoryUsage.heapTotal / 1024 / 1024),
+    heapUsed: Math.round(memoryUsage.heapUsed / 1024 / 1024),
+    external: Math.round(memoryUsage.external / 1024 / 1024),
+  };
+
+  // 応答時間の測定
+  const startTime = process.hrtime();
+  const elapsedTime = process.hrtime(startTime);
+  const responseTimeMs = elapsedTime[0] * 1000 + elapsedTime[1] / 1000000;
+
+  // 正常なら200、問題があれば503を返す
+  if (dbStatus === "connected" && memoryUsageMB.heapUsed < 3000) {
+    res.status(200).json({
+      status: "ok",
+      timestamp: new Date().toISOString(),
+      database: dbStatus,
+      memory: memoryUsageMB,
+      responseTime: responseTimeMs.toFixed(2) + "ms",
+    });
+  } else {
+    res.status(503).json({
+      status: "error",
+      timestamp: new Date().toISOString(),
+      database: dbStatus,
+      memory: memoryUsageMB,
+      responseTime: responseTimeMs.toFixed(2) + "ms",
+    });
+  }
+});
+
 // ミドルウェアの設定
 app.use(cors());
 app.use(express.json());
@@ -214,6 +253,8 @@ import webhookRoutes from "./routes/webhookRoutes";
 import repositoryWhitelistRoutes from "./routes/repositoryWhitelistRoutes";
 import aiChatRoutes from "./routes/aiChatRoutes";
 import usageLimitRoutes from "./routes/usageLimitRoutes";
+import projectRoutes from "./routes/projectRoutes";
+import groupRoutes from "./routes/groupRoutes";
 
 // ルートの登録
 app.use("/api/auth", authRoutes);
@@ -231,6 +272,8 @@ app.use("/api/webhooks", webhookRoutes);
 app.use("/api/admin/repository-whitelist", repositoryWhitelistRoutes);
 app.use("/api/ai-chat", aiChatRoutes);
 app.use("/api/usage-limits", usageLimitRoutes);
+app.use("/api/projects", projectRoutes);
+app.use("/api/groups", groupRoutes);
 
 // エラーハンドリング強化
 app.use(

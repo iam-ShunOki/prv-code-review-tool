@@ -12,12 +12,14 @@ export class ReviewService {
     user_id: number;
     title: string;
     description: string;
+    project_id?: number;
   }): Promise<Review> {
     const review = this.reviewRepository.create({
       user_id: reviewData.user_id,
       title: reviewData.title,
       description: reviewData.description,
       status: ReviewStatus.PENDING,
+      project_id: reviewData.project_id,
     });
 
     return this.reviewRepository.save(review);
@@ -30,6 +32,7 @@ export class ReviewService {
     return this.reviewRepository.find({
       where: { user_id: userId },
       order: { created_at: "DESC" },
+      relations: ["project"],
     });
   }
 
@@ -39,7 +42,7 @@ export class ReviewService {
   async getAllReviews(): Promise<Review[]> {
     return this.reviewRepository.find({
       order: { created_at: "DESC" },
-      relations: ["user"],
+      relations: ["user", "project"],
     });
   }
 
@@ -49,7 +52,7 @@ export class ReviewService {
   async getReviewById(id: number): Promise<Review | null> {
     return this.reviewRepository.findOne({
       where: { id },
-      relations: ["submissions"],
+      relations: ["submissions", "project"],
     });
   }
 
@@ -61,6 +64,37 @@ export class ReviewService {
     status: ReviewStatus
   ): Promise<Review | null> {
     await this.reviewRepository.update(id, { status });
+    return this.getReviewById(id);
+  }
+
+  /**
+   * 特定のプロジェクトに関連するレビュー一覧を取得
+   */
+  async getProjectReviews(projectId: number): Promise<Review[]> {
+    return this.reviewRepository.find({
+      where: { project_id: projectId },
+      order: { created_at: "DESC" },
+      relations: ["user"],
+    });
+  }
+
+  /**
+   * レビューの情報を更新（プロジェクト関連を含む）
+   */
+  async updateReview(
+    id: number,
+    reviewData: Partial<{
+      title: string;
+      description: string;
+      status: ReviewStatus;
+      project_id: number | null;
+    }>
+  ): Promise<Review | null> {
+    await this.reviewRepository.update(id, {
+      ...reviewData,
+      project_id:
+        reviewData.project_id === null ? undefined : reviewData.project_id,
+    });
     return this.getReviewById(id);
   }
 }

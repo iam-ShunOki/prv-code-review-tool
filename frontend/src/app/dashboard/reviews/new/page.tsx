@@ -1,8 +1,7 @@
-// frontend/src/app/dashboard/reviews/new/page.tsx
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect } from "react";
+import { useRouter, useSearchParams } from "next/navigation"; // SearchParamsを追加
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -17,12 +16,26 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"; // Selectコンポーネントを追加
 import { useToast } from "@/components/ui/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, ArrowLeft } from "lucide-react"; // ArrowLeftを追加
 import { useUsageLimit } from "@/contexts/UsageLimitContext";
 import { UsageLimitBadge } from "@/components/usage/UsageLimitBadge";
+
+// プロジェクト型定義を追加
+interface Project {
+  id: number;
+  name: string;
+  code: string;
+}
 
 // Monaco Editor をクライアントサイドのみでロード
 const MonacoEditor = dynamic(() => import("react-monaco-editor"), {
@@ -34,13 +47,16 @@ const reviewSchema = z.object({
   title: z.string().min(3, "タイトルは3文字以上入力してください"),
   description: z.string().optional(),
   expectation: z.string().optional(),
+  project_id: z.number().optional(), // プロジェクトIDフィールドを追加
 });
 
 type ReviewFormValues = z.infer<typeof reviewSchema>;
 
 export default function NewReviewPage() {
+  const searchParams = useSearchParams();
   const [code, setCode] = useState<string>("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [projects, setProjects] = useState<Project[]>([]); // プロジェクト一覧の状態を追加
   const { user, token } = useAuth();
   const router = useRouter();
   const { toast } = useToast();
@@ -54,16 +70,66 @@ export default function NewReviewPage() {
   const canUseCodeReview = canUseFeature("code_review");
   const remainingReviews = getRemainingUsage("code_review");
 
+  // プロジェクト一覧を取得
+  useEffect(() => {
+    const fetchProjects = async () => {
+      if (!token) return;
+
+      try {
+        const endpoint = isAdmin
+          ? `${process.env.NEXT_PUBLIC_API_URL}/api/projects/all`
+          : `${process.env.NEXT_PUBLIC_API_URL}/api/projects/my`;
+
+        const response = await fetch(endpoint, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        if (!response.ok) {
+          throw new Error("プロジェクト一覧の取得に失敗しました");
+        }
+
+        const data = await response.json();
+        setProjects(data.data || []);
+      } catch (error) {
+        console.error("プロジェクト取得エラー:", error);
+        toast({
+          title: "エラー",
+          description: "プロジェクト一覧の取得に失敗しました",
+          variant: "destructive",
+        });
+      }
+    };
+
+    fetchProjects();
+  }, [token, isAdmin, toast]);
+
+  // URLからプロジェクトIDを取得
+  useEffect(() => {
+    const projectId = searchParams.get("project");
+    if (projectId) {
+      const parsedId = parseInt(projectId, 10);
+      if (!isNaN(parsedId)) {
+        // プロジェクトIDをフォームにセット
+        setValue("project_id", parsedId);
+      }
+    }
+  }, [searchParams]);
+
   const {
     register,
     handleSubmit,
+    setValue,
     formState: { errors },
+    control,
   } = useForm<ReviewFormValues>({
     resolver: zodResolver(reviewSchema),
     defaultValues: {
       title: "",
       description: "",
       expectation: "",
+      project_id: undefined,
     },
   });
 
@@ -102,6 +168,7 @@ export default function NewReviewPage() {
           body: JSON.stringify({
             title: formData.title,
             description: formData.description || "",
+            project_id: formData.project_id, // プロジェクトIDを送信
           }),
         }
       );
@@ -143,7 +210,6 @@ export default function NewReviewPage() {
       });
 
       // レビュー一覧ページに遷移
-      // router.push("/dashboard/reviews");
       router.push(`/dashboard/reviews/${reviewId}`);
     } catch (error) {
       console.error("レビュー依頼エラー:", error);
@@ -174,7 +240,17 @@ export default function NewReviewPage() {
     <div className="space-y-8">
       <header>
         <div className="flex items-center justify-between">
-          <h1 className="text-3xl font-bold">新規コードレビュー依頼</h1>
+          <div className="flex items-center">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => router.push("/dashboard/reviews")}
+              className="mr-4"
+            >
+              <ArrowLeft className="mr-2 h-4 w-4" /> 戻る
+            </Button>
+            <h1 className="text-3xl font-bold">新規コードレビュー依頼</h1>
+          </div>
           {!isAdmin && (
             <div className="flex items-center bg-blue-50 px-3 py-1.5 rounded-md">
               <UsageLimitBadge featureKey="code_review" showLabel />
@@ -228,6 +304,34 @@ export default function NewReviewPage() {
                 rows={3}
               />
             </div>
+
+            {/* プロジェクト選択フィールドを追加 */}
+            <div className="space-y-2">
+              <label htmlFor="project_id" className="text-sm font-medium">
+                プロジェクト
+              </label>
+              <Select
+                onValueChange={(value) =>
+                  setValue("project_id", parseInt(value))
+                }
+                defaultValue={searchParams.get("project") || undefined}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="プロジェクトを選択（任意）" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">プロジェクトなし</SelectItem>
+                  {projects.map((project) => (
+                    <SelectItem key={project.id} value={project.id.toString()}>
+                      {project.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-gray-500">
+                レビューを関連付けるプロジェクトを選択できます
+              </p>
+            </div>
           </CardContent>
         </Card>
 
@@ -268,7 +372,7 @@ export default function NewReviewPage() {
             <Button
               type="button"
               variant="outline"
-              onClick={() => router.back()}
+              onClick={() => router.push("/dashboard/reviews")}
             >
               キャンセル
             </Button>

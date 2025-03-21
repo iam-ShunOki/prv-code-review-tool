@@ -16,6 +16,8 @@ import {
   Menu,
   X,
   GitFork,
+  FolderKanban,
+  UserPlus,
 } from "lucide-react";
 import { UsageLimitBadge } from "@/components/usage/UsageLimitBadge";
 
@@ -68,6 +70,8 @@ export function Sidebar() {
       icon: Code,
       badge: !isAdmin ? <UsageLimitBadge featureKey="code_review" /> : null,
     },
+    { name: "プロジェクト", href: "/dashboard/projects", icon: FolderKanban },
+    { name: "グループ", href: "/dashboard/groups", icon: UserPlus },
     ...(isAdmin
       ? [
           { name: "分析", href: "/dashboard/analytics", icon: BarChart },
@@ -154,7 +158,8 @@ export function Sidebar() {
                 className={`
                   flex items-center px-4 py-2 rounded-md text-sm font-medium
                   ${
-                    pathname === item.href
+                    pathname === item.href ||
+                    pathname.startsWith(item.href + "/")
                       ? "bg-indigo-100 text-indigo-700"
                       : "text-gray-700 hover:bg-gray-100"
                   }

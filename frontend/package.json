@@ -43,7 +43,8 @@
     "tailwindcss-animate": "^1.0.6",
     "zod": "^3.21.4",
     "date-fns": "^2.30.0",
-    "react-day-picker": "^8.8.0"
+    "react-day-picker": "^8.8.0",
+    "uuid": "^11.1.0"
   },
   "devDependencies": {
     "@types/jsonwebtoken": "^9.0.2",

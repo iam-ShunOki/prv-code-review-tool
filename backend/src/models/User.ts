@@ -5,10 +5,14 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   OneToMany,
+  // 既存のインポート
 } from "typeorm";
 import { Review } from "./Review";
 import { Evaluation } from "./Evaluation";
 import { Session } from "./Session";
+// 新しいインポートを追加
+import { UserProject } from "./UserProject";
+import { UserGroupMember } from "./UserGroupMember";
 
 export enum UserRole {
   ADMIN = "admin",
@@ -56,4 +60,11 @@ export class User {
 
   @OneToMany(() => Session, (session) => session.user)
   sessions: Session[];
+
+  // 新しいリレーションを追加
+  @OneToMany(() => UserProject, (userProject) => userProject.user)
+  userProjects: UserProject[];
+
+  @OneToMany(() => UserGroupMember, (membership) => membership.user)
+  groupMemberships: UserGroupMember[];
 }

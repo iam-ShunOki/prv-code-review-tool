@@ -1,4 +1,4 @@
-// backend/src/models/Feedback.ts の修正バージョン
+// backend/src/models/Feedback.ts
 import {
   Entity,
   PrimaryGeneratedColumn,
@@ -39,8 +39,7 @@ export class Feedback {
   })
   priority: FeedbackPriority;
 
-  @Column({ nullable: true })
-  line_number: number;
+  // line_numberフィールドを削除
 
   @Column({ default: false })
   is_resolved: boolean;

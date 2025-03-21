@@ -1,36 +1,38 @@
+// frontend/src/app/dashboard/groups/[id]/reviews/page.tsx
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   Card,
   CardHeader,
   CardTitle,
+  CardDescription,
   CardContent,
   CardFooter,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input"; // 追加
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select"; // 追加
-import { useAuth } from "@/contexts/AuthContext";
+} from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/use-toast";
+import { useAuth } from "@/contexts/AuthContext";
 import {
+  ArrowLeft,
+  Search,
+  Filter,
   Plus,
   Code,
   Clock,
   CheckCircle,
   AlertCircle,
-  Search,
-  Filter,
-  Briefcase,
-} from "lucide-react"; // アイコン追加
+} from "lucide-react";
 import {
   Pagination,
   PaginationContent,
@@ -41,6 +43,13 @@ import {
   PaginationEllipsis,
 } from "@/components/ui/pagination";
 
+// グループの型定義
+interface Group {
+  id: number;
+  name: string;
+  description: string;
+}
+
 // レビューの型定義
 interface Review {
   id: number;
@@ -49,82 +58,40 @@ interface Review {
   status: "pending" | "in_progress" | "completed";
   created_at: string;
   updated_at: string;
-  project_id: number | null;
-  project?: {
+  user: {
     id: number;
     name: string;
-    code: string;
   };
 }
 
-// プロジェクトの型定義（追加）
-interface Project {
-  id: number;
-  name: string;
-  code: string;
-}
-
-export default function ReviewsPage() {
-  const searchParams = useSearchParams();
+export default function GroupReviewsPage({
+  params,
+}: {
+  params: { id: string };
+}) {
+  const router = useRouter();
+  const { toast } = useToast();
+  const { token } = useAuth();
+  const [group, setGroup] = useState<Group | null>(null);
   const [reviews, setReviews] = useState<Review[]>([]);
-  const [filteredReviews, setFilteredReviews] = useState<Review[]>([]); // 追加
-  const [projects, setProjects] = useState<Project[]>([]); // 追加
+  const [filteredReviews, setFilteredReviews] = useState<Review[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
-  const [searchQuery, setSearchQuery] = useState(""); // 追加
-  const [selectedProject, setSelectedProject] = useState<string>(""); // 追加
-  const [selectedStatus, setSelectedStatus] = useState<string>(""); // 追加
-  const itemsPerPage = 4; // 1ページあたりの表示数
-  const { user, token } = useAuth();
-  const { toast } = useToast();
-  const router = useRouter();
+  const itemsPerPage = 10;
 
-  // URLからプロジェクトIDを取得（追加）
+  // グループ情報とレビュー一覧を取得
   useEffect(() => {
-    const projectId = searchParams.get("project");
-    if (projectId) {
-      setSelectedProject(projectId);
-    }
-  }, [searchParams]);
-
-  // プロジェクト一覧の取得（追加）
-  useEffect(() => {
-    const fetchProjects = async () => {
+    const fetchData = async () => {
       if (!token) return;
 
+      setIsLoading(true);
       try {
-        const endpoint =
-          user?.role === "admin"
-            ? `${process.env.NEXT_PUBLIC_API_URL}/api/projects/all`
-            : `${process.env.NEXT_PUBLIC_API_URL}/api/projects/my`;
-
-        const response = await fetch(endpoint, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
-
-        if (!response.ok) {
-          throw new Error("プロジェクト一覧の取得に失敗しました");
-        }
-
-        const data = await response.json();
-        setProjects(data.data || []);
-      } catch (error) {
-        console.error("プロジェクト取得エラー:", error);
-      }
-    };
-
-    fetchProjects();
-  }, [token, user?.role]);
-
-  // レビュー一覧を取得
-  useEffect(() => {
-    const fetchReviews = async () => {
-      try {
-        const response = await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL}/api/reviews`,
+        // グループ情報を取得
+        const groupResponse = await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL}/api/groups/${params.id}`,
           {
             headers: {
               Authorization: `Bearer ${token}`,
@@ -132,20 +99,40 @@ export default function ReviewsPage() {
           }
         );
 
-        if (!response.ok) {
+        if (!groupResponse.ok) {
+          throw new Error("グループ情報の取得に失敗しました");
+        }
+
+        const groupData = await groupResponse.json();
+        setGroup(groupData.data);
+
+        // グループに関連するレビュー一覧を取得
+        const reviewsResponse = await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL}/api/groups/${params.id}/reviews`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }
+        );
+
+        if (!reviewsResponse.ok) {
           throw new Error("レビュー一覧の取得に失敗しました");
         }
 
-        const data = await response.json();
-        setReviews(data.data);
+        const reviewsData = await reviewsResponse.json();
+        setReviews(reviewsData.data || []);
+        setFilteredReviews(reviewsData.data || []);
 
-        // 初期表示時のフィルタリング（追加）
-        filterReviews(data.data, searchQuery, selectedProject, selectedStatus);
+        // ページネーション設定
+        setTotalPages(
+          Math.ceil((reviewsData.data || []).length / itemsPerPage)
+        );
       } catch (error) {
-        console.error("レビュー一覧取得エラー:", error);
+        console.error("データ取得エラー:", error);
         toast({
-          title: "エラーが発生しました",
-          description: "レビュー一覧の取得に失敗しました",
+          title: "エラー",
+          description: "データの取得に失敗しました",
           variant: "destructive",
         });
       } finally {
@@ -153,55 +140,49 @@ export default function ReviewsPage() {
       }
     };
 
-    if (token) {
-      fetchReviews();
-    }
-  }, [token, toast]);
+    fetchData();
+  }, [params.id, token, toast]);
 
-  // 検索・フィルタリング関数（追加）
-  const filterReviews = (
-    reviewList: Review[],
-    query: string,
-    projectId: string,
-    status: string
-  ) => {
-    let filtered = [...reviewList];
+  // 検索とフィルタリング
+  useEffect(() => {
+    let filtered = [...reviews];
 
-    // タイトルまたは説明で検索
-    if (query) {
+    // 検索クエリによるフィルタリング
+    if (searchQuery) {
       filtered = filtered.filter(
         (review) =>
-          review.title.toLowerCase().includes(query.toLowerCase()) ||
+          review.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
           (review.description &&
-            review.description.toLowerCase().includes(query.toLowerCase()))
+            review.description
+              .toLowerCase()
+              .includes(searchQuery.toLowerCase()))
       );
     }
 
-    // プロジェクトでフィルタリング
-    if (projectId) {
-      filtered = filtered.filter(
-        (review) => review.project_id === parseInt(projectId)
-      );
-    }
-
-    // ステータスでフィルタリング
-    if (status) {
-      filtered = filtered.filter((review) => review.status === status);
+    // ステータスによるフィルタリング
+    if (statusFilter) {
+      filtered = filtered.filter((review) => review.status === statusFilter);
     }
 
     setFilteredReviews(filtered);
-
-    // ページネーションの更新
     setCurrentPage(1);
     setTotalPages(Math.ceil(filtered.length / itemsPerPage));
+  }, [searchQuery, statusFilter, reviews]);
+
+  // フィルターをリセット
+  const resetFilters = () => {
+    setSearchQuery("");
+    setStatusFilter("");
   };
 
-  // 検索とフィルタリングを適用
-  useEffect(() => {
-    filterReviews(reviews, searchQuery, selectedProject, selectedStatus);
-  }, [searchQuery, selectedProject, selectedStatus, reviews]);
+  // 現在のページのデータを取得
+  const getCurrentPageData = () => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    const endIndex = startIndex + itemsPerPage;
+    return filteredReviews.slice(startIndex, endIndex);
+  };
 
-  // ステータスに応じたバッジを返す関数
+  // ステータスに応じたバッジを返す
   const getStatusBadge = (status: Review["status"]) => {
     switch (status) {
       case "pending":
@@ -231,7 +212,7 @@ export default function ReviewsPage() {
     }
   };
 
-  // 日付をフォーマットする関数
+  // 日付をフォーマット
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
     return date.toLocaleDateString("ja-JP", {
@@ -243,26 +224,11 @@ export default function ReviewsPage() {
     });
   };
 
-  // 検索とフィルタをリセット（追加）
-  const resetFilters = () => {
-    setSearchQuery("");
-    setSelectedProject("");
-    setSelectedStatus("");
-  };
-
-  // 現在のページのデータを取得
-  const getCurrentPageData = () => {
-    const startIndex = (currentPage - 1) * itemsPerPage;
-    const endIndex = startIndex + itemsPerPage;
-    return filteredReviews.slice(startIndex, endIndex);
-  };
-
-  // ページネーションリンクを生成する関数
+  // ページネーションリンクを生成
   const renderPaginationLinks = () => {
     const pageItems = [];
-    const maxDisplayedPages = 5; // 最大表示ページ数
 
-    // 最初のページへのリンク（常に表示）
+    // 最初のページへのリンク
     pageItems.push(
       <PaginationItem key="first">
         <PaginationLink
@@ -274,7 +240,7 @@ export default function ReviewsPage() {
       </PaginationItem>
     );
 
-    // 左の省略記号（必要な場合）
+    // 左の省略記号
     if (currentPage > 3) {
       pageItems.push(
         <PaginationItem key="ellipsis-left">
@@ -289,7 +255,7 @@ export default function ReviewsPage() {
       i <= Math.min(totalPages - 1, currentPage + 1);
       i++
     ) {
-      if (i === 1 || i === totalPages) continue; // 最初と最後のページは別に処理
+      if (i === 1 || i === totalPages) continue;
       pageItems.push(
         <PaginationItem key={i}>
           <PaginationLink
@@ -302,7 +268,7 @@ export default function ReviewsPage() {
       );
     }
 
-    // 右の省略記号（必要な場合）
+    // 右の省略記号
     if (currentPage < totalPages - 2) {
       pageItems.push(
         <PaginationItem key="ellipsis-right">
@@ -311,7 +277,7 @@ export default function ReviewsPage() {
       );
     }
 
-    // 最後のページへのリンク（常に表示、ただし最初のページと同じ場合は非表示）
+    // 最後のページへのリンク
     if (totalPages > 1) {
       pageItems.push(
         <PaginationItem key="last">
@@ -338,8 +304,26 @@ export default function ReviewsPage() {
           >
             <span className="visually-hidden"></span>
           </div>
-          <p className="mt-2">レビュー一覧を読み込み中...</p>
+          <p className="mt-2">データを読み込み中...</p>
         </div>
+      </div>
+    );
+  }
+
+  if (!group) {
+    return (
+      <div className="text-center p-10">
+        <h2 className="text-xl font-semibold">グループが見つかりません</h2>
+        <p className="mt-2 text-gray-500">
+          指定されたグループは存在しないか、アクセス権がありません。
+        </p>
+        <Button
+          variant="outline"
+          className="mt-4"
+          onClick={() => router.push("/dashboard/groups")}
+        >
+          <ArrowLeft className="mr-2 h-4 w-4" /> グループ一覧に戻る
+        </Button>
       </div>
     );
   }
@@ -347,21 +331,33 @@ export default function ReviewsPage() {
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-3xl font-bold">コードレビュー一覧</h1>
-          <p className="text-gray-500 mt-1">
-            これまでに依頼したすべてのコードレビューとその状況
-          </p>
+        <div className="flex items-center">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => router.push(`/dashboard/groups/${params.id}`)}
+            className="mr-4"
+          >
+            <ArrowLeft className="mr-2 h-4 w-4" />
+          </Button>
+          <div>
+            <h1 className="text-2xl font-bold">{group.name} のレビュー一覧</h1>
+            <p className="text-gray-500 mt-1">
+              グループに関連するすべてのコードレビューと状況
+            </p>
+          </div>
         </div>
         <Button
-          onClick={() => router.push("/dashboard/reviews/new")}
+          onClick={() =>
+            router.push(`/dashboard/reviews/new?group=${group.id}`)
+          }
           className="flex items-center"
         >
           <Plus className="mr-2 h-4 w-4" /> 新規レビュー
         </Button>
       </div>
 
-      {/* 検索・フィルタリング機能（追加） */}
+      {/* 検索・フィルタリング機能 */}
       <Card>
         <CardContent className="pt-6">
           <div className="flex flex-col md:flex-row gap-4">
@@ -375,28 +371,7 @@ export default function ReviewsPage() {
               />
             </div>
             <div className="w-full md:w-1/4">
-              <Select
-                value={selectedProject}
-                onValueChange={setSelectedProject}
-              >
-                <SelectTrigger className="w-full">
-                  <div className="flex items-center">
-                    <Briefcase className="mr-2 h-4 w-4" />
-                    <SelectValue placeholder="プロジェクト" />
-                  </div>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="">すべてのプロジェクト</SelectItem>
-                  {projects.map((project) => (
-                    <SelectItem key={project.id} value={project.id.toString()}>
-                      {project.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="w-full md:w-1/4">
-              <Select value={selectedStatus} onValueChange={setSelectedStatus}>
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
                 <SelectTrigger className="w-full">
                   <div className="flex items-center">
                     <Filter className="mr-2 h-4 w-4" />
@@ -427,17 +402,19 @@ export default function ReviewsPage() {
           <CardContent>
             <div className="space-y-4">
               {reviews.length === 0 ? (
-                <p className="text-gray-500">レビュー依頼がまだありません</p>
+                <p className="text-gray-500">レビューがまだありません</p>
               ) : (
                 <p className="text-gray-500">
                   条件に一致するレビューがありません
                 </p>
               )}
               <Button
-                onClick={() => router.push("/dashboard/reviews/new")}
+                onClick={() =>
+                  router.push(`/dashboard/reviews/new?group=${group.id}`)
+                }
                 className="flex items-center mx-auto"
               >
-                <Plus className="mr-2 h-4 w-4" /> 新規レビューを依頼する
+                <Plus className="mr-2 h-4 w-4" /> 新規レビューを作成する
               </Button>
             </div>
           </CardContent>
@@ -447,7 +424,7 @@ export default function ReviewsPage() {
           <div className="grid grid-cols-1 gap-4">
             {getCurrentPageData().map((review) => (
               <Card key={review.id} className="overflow-hidden">
-                <CardHeader className="bg-gray-50 py-2 px-4">
+                <CardHeader className="bg-gray-50 py-3 px-4">
                   <div className="flex justify-between items-center">
                     <CardTitle className="text-md">{review.title}</CardTitle>
                     {getStatusBadge(review.status)}
@@ -460,21 +437,16 @@ export default function ReviewsPage() {
                   <div className="mt-3 text-xs text-gray-500 flex flex-col sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex flex-col sm:flex-row sm:items-center gap-2">
                       <span>作成日: {formatDate(review.created_at)}</span>
-                      {review.project && (
-                        <span className="flex items-center">
-                          <Briefcase className="h-3 w-3 mr-1" />
-                          {review.project.name}
-                        </span>
-                      )}
+                      <span className="flex items-center">
+                        提出者: {review.user.name}
+                      </span>
                     </div>
                     <Button
                       className="flex mt-2 sm:mt-0"
                       variant="outline"
                       size="sm"
                     >
-                      <Link href={`/dashboard/reviews/${review.id}`}>
-                        詳細を見る
-                      </Link>
+                      <a href={`/dashboard/reviews/${review.id}`}>詳細を見る</a>
                     </Button>
                   </div>
                 </CardContent>
@@ -483,32 +455,34 @@ export default function ReviewsPage() {
           </div>
 
           {/* ページネーション */}
-          <div className="fixed bottom-0 left-0 right-0 p-4">
-            <Pagination>
-              <PaginationContent>
-                {/* 前のページへのリンク */}
-                {currentPage > 1 && (
-                  <PaginationItem>
-                    <PaginationPrevious
-                      onClick={() => setCurrentPage(currentPage - 1)}
-                    />
-                  </PaginationItem>
-                )}
+          {totalPages > 1 && (
+            <div className="mt-6">
+              <Pagination>
+                <PaginationContent>
+                  {/* 前のページへのリンク */}
+                  {currentPage > 1 && (
+                    <PaginationItem>
+                      <PaginationPrevious
+                        onClick={() => setCurrentPage(currentPage - 1)}
+                      />
+                    </PaginationItem>
+                  )}
 
-                {/* ページ番号リンク */}
-                {renderPaginationLinks()}
+                  {/* ページ番号リンク */}
+                  {renderPaginationLinks()}
 
-                {/* 次のページへのリンク */}
-                {currentPage < totalPages && (
-                  <PaginationItem>
-                    <PaginationNext
-                      onClick={() => setCurrentPage(currentPage + 1)}
-                    />
-                  </PaginationItem>
-                )}
-              </PaginationContent>
-            </Pagination>
-          </div>
+                  {/* 次のページへのリンク */}
+                  {currentPage < totalPages && (
+                    <PaginationItem>
+                      <PaginationNext
+                        onClick={() => setCurrentPage(currentPage + 1)}
+                      />
+                    </PaginationItem>
+                  )}
+                </PaginationContent>
+              </Pagination>
+            </div>
+          )}
         </>
       )}
     </div>

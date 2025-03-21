@@ -92,22 +92,6 @@ export default function DashboardPage() {
               <Card className="p-6 flex flex-col h-full">
                 <div className="flex-1">
                   <h3 className="font-semibold flex items-center">
-                    <TrendingUp className="h-5 w-5 mr-2" />
-                    進捗状況の確認
-                  </h3>
-                  <p className="my-4 text-gray-500 text-sm">
-                    これまでのレビュー履歴や成長推移を確認できます。スキルレベルと改善ポイントも確認できます。
-                  </p>
-                </div>
-                <div className="mt-auto pt-4">
-                  <Button asChild variant="outline" className="w-full">
-                    <Link href="/dashboard/progress">確認する</Link>
-                  </Button>
-                </div>
-              </Card>
-              <Card className="p-6 flex flex-col h-full">
-                <div className="flex-1">
-                  <h3 className="font-semibold flex items-center">
                     <BarChart className="h-5 w-5 mr-2" />
                     分析レポート
                   </h3>

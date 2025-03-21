@@ -1,4 +1,3 @@
-// backend/src/models/Review.ts
 import {
   Entity,
   PrimaryGeneratedColumn,
@@ -8,9 +7,11 @@ import {
   ManyToOne,
   OneToMany,
   JoinColumn,
+  // 既存のインポート
 } from "typeorm";
 import { User } from "./User";
 import { CodeSubmission } from "./CodeSubmission";
+import { Project } from "./Project";
 
 export enum ReviewStatus {
   PENDING = "pending",
@@ -47,6 +48,17 @@ export class Review {
 
   @Column({ nullable: true, length: 255 })
   backlog_repository: string;
+
+  // 新しいカラムとリレーションを追加
+  @Column({ nullable: true })
+  project_id: number;
+
+  @ManyToOne(() => Project, (project) => project.reviews, {
+    nullable: true,
+    onDelete: "SET NULL", // プロジェクトが削除された場合の動作
+  })
+  @JoinColumn({ name: "project_id" })
+  project: Project;
 
   @CreateDateColumn()
   created_at: Date;
