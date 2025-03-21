@@ -18,6 +18,12 @@ export class FeedbackService {
       throw new Error("必須フィールドが不足しています");
     }
 
+    console.log(
+      `\n\nコードレビュー時のフィードバックに何が含まれているか確認します。\n\n${JSON.stringify(
+        feedbackData
+      )}`
+    );
+
     // TypeScript型チェックエラーを回避するためEntityを手動で構築
     const entity = {
       submission_id: feedbackData.submission_id,
@@ -26,6 +32,7 @@ export class FeedbackService {
       priority: feedbackData.priority || FeedbackPriority.MEDIUM,
       is_resolved: feedbackData.is_resolved || false,
       reference_url: feedbackData.reference_url,
+      code_snippet: feedbackData.code_snippet,
     };
 
     // 直接リポジトリに渡して保存

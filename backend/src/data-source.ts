@@ -22,6 +22,7 @@ import { AddFeedbackReferenceUrl1625000000700 } from "./migrations/1625000000700
 import { AddUsageLimitsAndLogs1625000000800 } from "./migrations/1625000000800-AddUsageLimitsAndLogs";
 import { AddProjectAndGroupManagement1625000000900 } from "./migrations/1625000000900-AddProjectAndGroupManagement";
 import { RemoveLineNumber1625000001000 } from "./migrations/1625000001000-RemoveLineNumber";
+import { AddCodeSnippetToFeedback1625000001100 } from "./migrations/1625000001100-AddCodeSnippetToFeedback";
 import dotenv from "dotenv";
 import { NotificationSettings } from "./models/NotificationSettings";
 import { BacklogRepository } from "./models/BacklogRepository";
@@ -71,6 +72,7 @@ export const AppDataSource = new DataSource({
     AddUsageLimitsAndLogs1625000000800,
     AddProjectAndGroupManagement1625000000900,
     RemoveLineNumber1625000001000,
+    AddCodeSnippetToFeedback1625000001100,
   ],
   subscribers: [],
 

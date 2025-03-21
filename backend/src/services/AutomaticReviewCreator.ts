@@ -217,6 +217,12 @@ export class AutomaticReviewCreator {
             `Generated ${reviewFeedbacks.length} feedbacks for PR #${prData.number}`
           );
 
+          console.log(
+            `これはFeedbackに登録する直前のコンソール出力です。\n\n reviewFeedbacks: \n\n ${JSON.stringify(
+              reviewFeedbacks
+            )}\n\n`
+          );
+
           // フィードバックをデータベースに保存
           const feedbackService = new FeedbackService();
           for (const feedback of reviewFeedbacks) {

@@ -420,13 +420,20 @@ export class ReviewFeedbackSenderService {
    * 単一のフィードバックをマークダウン形式で整形
    * line_numberへの参照を削除
    */
+  /**
+   * 単一のフィードバックをマークダウン形式で整形
+   */
   private formatSingleFeedback(feedback: Feedback, index: number): string {
     let result = `#### ${index}. ${feedback.problem_point}\n\n`;
 
-    // line_numberフィールドへの参照を削除
     // 参考リソースがある場合は表示
     if (feedback.reference_url) {
       result += `**参考リソース**: [詳細情報](${feedback.reference_url})\n\n`;
+    }
+
+    // コードスニペットがある場合は表示
+    if (feedback.code_snippet) {
+      result += `**問題のあるコード**:\n\`\`\`\n${feedback.code_snippet}\n\`\`\`\n\n`;
     }
 
     result += `**提案**: ${feedback.suggestion}\n\n`;

@@ -15,16 +15,31 @@ import {
   Info,
   CheckCircle,
   ExternalLink,
+  Code,
 } from "lucide-react";
+import dynamic from "next/dynamic";
+
+// Monaco Editor をクライアントサイドのみでロード
+const MonacoEditor = dynamic(() => import("react-monaco-editor"), {
+  ssr: false,
+});
+
+// Monaco Editor の設定
+const editorOptions = {
+  selectOnLineNumbers: true,
+  readOnly: true,
+  minimap: { enabled: true },
+};
 
 interface Feedback {
   id: number;
   submission_id: number;
   problem_point: string;
   suggestion: string;
-  reference_url?: string; // 参考URLフィールドを追加
+  reference_url?: string;
+  code_snippet?: string; // コードスニペットフィールド
   priority: "high" | "medium" | "low";
-  line_number: number | null;
+  is_resolved: boolean;
   created_at: string;
 }
 
@@ -100,7 +115,7 @@ export function FeedbackDialog({
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="md:max-w-[1200px] sm:max-w-lg">
         <DialogHeader>
           <div className="flex items-center">
             {getPriorityIcon()}
@@ -122,13 +137,31 @@ export function FeedbackDialog({
                 </span>
                 <p className="font-medium">{feedback.problem_point}</p>
               </div>
-              {feedback.line_number && (
-                <p className="text-xs mt-1 text-right">
-                  該当行: {feedback.line_number}
-                </p>
-              )}
             </div>
           </div>
+
+          {/* コードスニペット - 追加 */}
+          {feedback.code_snippet && (
+            <div>
+              <h3 className="text-sm font-medium mb-1 flex items-center">
+                <Code className="h-4 w-4 mr-1" />
+                問題のコード
+              </h3>
+              <div className="h-60 rounded border bg-gray-50 overflow-auto">
+                {/* <pre className="whitespace-pre-wrap">
+                  {feedback.code_snippet}
+                </pre> */}
+                <MonacoEditor
+                  width="100%"
+                  height="100%"
+                  language="javascript" // 言語は動的に判断できるとよい
+                  theme="vs-dark"
+                  value={feedback.code_snippet}
+                  options={editorOptions}
+                />
+              </div>
+            </div>
+          )}
 
           {/* ヒント */}
           <div>
@@ -138,7 +171,7 @@ export function FeedbackDialog({
             </div>
           </div>
 
-          {/* 参考URL - 新しく追加 */}
+          {/* 参考URL */}
           {feedback.reference_url && (
             <div>
               <h3 className="text-sm font-medium mb-1">参考資料</h3>

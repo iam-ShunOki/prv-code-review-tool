@@ -160,7 +160,14 @@ export function FeedbackList({
 
       {/* フィードバック詳細ダイアログ */}
       <FeedbackDialog
-        feedback={selectedFeedback}
+        feedback={
+          selectedFeedback
+            ? {
+                ...selectedFeedback,
+                is_resolved: isResolved(selectedFeedback.id),
+              }
+            : null
+        }
         isOpen={dialogOpen}
         onClose={closeFeedbackDialog}
         onMarkResolved={onMarkResolved}

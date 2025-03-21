@@ -32,14 +32,15 @@ export class Feedback {
   @Column({ type: "text", nullable: true })
   reference_url: string;
 
+  @Column({ type: "text", nullable: true })
+  code_snippet: string; // 問題のあるコードスニペット
+
   @Column({
     type: "enum",
     enum: FeedbackPriority,
     default: FeedbackPriority.MEDIUM,
   })
   priority: FeedbackPriority;
-
-  // line_numberフィールドを削除
 
   @Column({ default: false })
   is_resolved: boolean;

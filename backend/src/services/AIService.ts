@@ -26,6 +26,7 @@ interface ReviewFeedback {
   priority: FeedbackPriority;
   file_path?: string;
   reference_url?: string; // 参考URL
+  code_snippet?: string; // 問題のあるコードスニペット
 }
 
 // コード問題の検出結果パース用のスキーマ（line_numberを削除）
@@ -667,7 +668,8 @@ export class AIService {
           "problem_point": "問題点の簡潔な説明",
           "suggestion": "問題の本質を理解するためのヒントと学習のポイント",
           "reference_url": "関連する公式ドキュメントまたはベストプラクティスガイドのURL",
-          "priority": "high/medium/low"
+          "priority": "high/medium/low",
+          "code_snippet": "問題のあるコードスニペット"
         }}
       ]
 
@@ -748,6 +750,7 @@ export class AIService {
           priority: this.mapPriority(feedback.priority),
           file_path: context.filePath,
           reference_url: feedback.reference_url,
+          code_snippet: feedback.code_snippet, // コードスニペットを追加
         }));
       } catch (parseError) {
         console.error("Failed to parse AI response:", parseError);
@@ -913,7 +916,7 @@ export class AIService {
             suggestion:
               "コードは全体的に良好で、重大な改善点は見つかりませんでした。素晴らしい仕事です！",
             priority: FeedbackPriority.LOW,
-            reference_url: "https://github.com/goldbergyoni/nodebestpractices",
+            reference_url: undefined,
           },
         ];
       }
@@ -941,6 +944,7 @@ export class AIService {
             priority: this.mapPriority(problem.priority),
             file_path: undefined, // 必要に応じて設定
             reference_url: referenceUrl,
+            code_snippet: problem.code_snippet, // 問題のあるコードスニペットを追加
           } as ReviewFeedback;
         })
       );
@@ -1014,6 +1018,7 @@ export class AIService {
       4. 検索クエリは具体的かつ簡潔にし、言語/フレームワーク名を含めてください
       5. 提案される改善方法は具体的かつ教育的にし、単に「こう書け」ではなく「なぜそうすべきか」を説明してください
       6. 行番号についての情報は含めないでください。行番号ではなく、問題のあるコードを直接引用してください。
+      7. レビューは必ず日本語で回答してください。
       
       ## コード例用の注意事項
       コードサンプルやJavaScriptのオブジェクト表記を含める場合は、中括弧を次のようにエスケープして記述してください：
@@ -1063,24 +1068,33 @@ export class AIService {
         } documentation best practices`;
 
         try {
-          // 検索を実行
-          const searchResults = await this.searchTool.call(enhancedQuery);
+          console.log(`Executing search query: "${enhancedQuery}"`);
 
-          // 検索結果をJSONとしてパース
-          const parsedResults =
-            typeof searchResults === "string"
-              ? JSON.parse(searchResults)
-              : searchResults;
+          // 検索を実行 - invoke()メソッドを使用
+          const searchResults = await this.searchTool.invoke({
+            input: enhancedQuery,
+          });
+
+          console.log(`Search results received. Type: ${typeof searchResults}`);
+          console.log(
+            `Search results preview: ${JSON.stringify(searchResults).substring(
+              0,
+              200
+            )}...`
+          );
 
           // 検索結果から最も関連性の高いURLを抽出
           const relevantUrl = this.extractRelevantUrl(
-            parsedResults,
+            searchResults,
             language,
             framework
           );
 
           if (relevantUrl) {
+            console.log(`Found relevant URL: ${relevantUrl}`);
             return relevantUrl;
+          } else {
+            console.log(`No relevant URL found for query: "${enhancedQuery}"`);
           }
         } catch (searchError) {
           console.error(
@@ -1092,6 +1106,9 @@ export class AIService {
         }
       }
 
+      console.log(
+        `No relevant URLs found for any queries, using default reference`
+      );
       // 検索結果がない場合はデフォルトのリファレンスを返す
       return this.getDefaultReference(language, framework);
     } catch (error) {
@@ -1109,41 +1126,132 @@ export class AIService {
     language: string,
     framework: string | null
   ): string | null {
-    // Google検索結果の形式
-    if (
-      searchResults.items &&
-      Array.isArray(searchResults.items) &&
-      searchResults.items.length > 0
-    ) {
-      return searchResults.items[0].link;
-    }
-    // Bing検索結果の形式
-    else if (
-      searchResults.webPages &&
-      searchResults.webPages.value &&
-      searchResults.webPages.value.length > 0
-    ) {
-      return searchResults.webPages.value[0].url;
-    }
-    // その他の形式（モック検索結果などの場合）
-    else if (typeof searchResults === "string") {
-      try {
-        const parsedResults = JSON.parse(searchResults);
-        if (
-          parsedResults.results &&
-          Array.isArray(parsedResults.results) &&
-          parsedResults.results.length > 0
-        ) {
-          return parsedResults.results[0].link || parsedResults.results[0].url;
-        }
-      } catch (e) {
-        // JSONのパースに失敗した場合はnullを返す
-        return null;
-      }
+    // デバッグログを追加
+    console.log(`Search results type: ${typeof searchResults}`);
+    if (typeof searchResults === "object") {
+      console.log(
+        `Search results keys: ${Object.keys(searchResults).join(", ")}`
+      );
     }
 
-    // どの形式にも該当しない場合はnullを返す
-    return null;
+    try {
+      // 1. Google Custom Search API (LangChain v0.3+)
+      if (typeof searchResults === "object" && searchResults !== null) {
+        // a. モダンなLangChain v0.3+のGoogleカスタム検索結果形式
+        if (searchResults.result) {
+          // LangChain v0.3.xのGoogleカスタム検索ツール形式
+          const result = searchResults.result;
+          if (typeof result === "string") {
+            try {
+              const parsed = JSON.parse(result);
+              if (
+                parsed.items &&
+                Array.isArray(parsed.items) &&
+                parsed.items.length > 0
+              ) {
+                return parsed.items[0].link;
+              }
+            } catch (e) {
+              console.log(`Failed to parse search result string: ${e}`);
+              // 文字列だが、JSONではない場合（URL自体である可能性も）
+              if (result.startsWith("http")) {
+                return result;
+              }
+            }
+          } else if (
+            typeof result === "object" &&
+            result.items &&
+            Array.isArray(result.items)
+          ) {
+            // すでにオブジェクトの場合
+            return result.items[0]?.link || null;
+          }
+        }
+
+        // b. 旧形式（直接GoogleカスタムAPIからのレスポンス構造）- 後方互換性のため
+        if (
+          searchResults.items &&
+          Array.isArray(searchResults.items) &&
+          searchResults.items.length > 0
+        ) {
+          return searchResults.items[0].link;
+        }
+
+        // c. Bing検索APIの形式
+        if (
+          searchResults.webPages &&
+          searchResults.webPages.value &&
+          searchResults.webPages.value.length > 0
+        ) {
+          return searchResults.webPages.value[0].url;
+        }
+
+        // d. 一般的な配列形式（まとめられた検索結果）
+        if (Array.isArray(searchResults) && searchResults.length > 0) {
+          // 最初の要素にlinkかurlがあるか確認
+          const firstResult = searchResults[0];
+          if (typeof firstResult === "object" && firstResult !== null) {
+            return firstResult.link || firstResult.url || null;
+          }
+        }
+      }
+
+      // 2. 文字列形式の検索結果
+      if (typeof searchResults === "string") {
+        // a. JSON文字列としてパース
+        try {
+          const parsedResults = JSON.parse(searchResults);
+
+          // パースしたJSONを再度チェック
+          if (
+            parsedResults.items &&
+            Array.isArray(parsedResults.items) &&
+            parsedResults.items.length > 0
+          ) {
+            return parsedResults.items[0].link;
+          }
+
+          if (
+            parsedResults.results &&
+            Array.isArray(parsedResults.results) &&
+            parsedResults.results.length > 0
+          ) {
+            return (
+              parsedResults.results[0].link || parsedResults.results[0].url
+            );
+          }
+
+          // LangChain v0.3+形式
+          if (parsedResults.result && parsedResults.result.items) {
+            return parsedResults.result.items[0].link;
+          }
+        } catch (e) {
+          // JSONではない文字列の場合
+          console.log(`Failed to parse search result as JSON: ${e}`);
+
+          // URLのような文字列であればそのまま返す
+          if (searchResults.startsWith("http")) {
+            return searchResults;
+          }
+        }
+      }
+
+      // 3. 最終手段：文字列内からURLらしき部分を抽出
+      if (typeof searchResults === "string") {
+        const urlRegex = /(https?:\/\/[^\s"'<>]+)/g;
+        const matches = searchResults.match(urlRegex);
+        if (matches && matches.length > 0) {
+          return matches[0];
+        }
+      }
+
+      // どの形式にも該当しない場合はnullを返す
+      console.warn(`Could not extract URL from search results`);
+      return null;
+    } catch (error) {
+      console.error(`Error extracting URL from search results:`, error);
+      return null;
+    }
   }
 
   /**
@@ -1256,7 +1364,8 @@ export class AIService {
           "problem_point": "問題点の簡潔な説明",
           "suggestion": "問題の本質を理解するためのヒントと学習のポイント（具体的な解決策は含めない）",
           "reference_url": "関連する公式ドキュメントまたはベストプラクティスガイドの具体的なURL",
-          "priority": "high/medium/lowのいずれか"
+          "priority": "high/medium/lowのいずれか",
+          "code_snippet": "問題のあるコードスニペット"
         }},
         ...
       ]
@@ -1323,6 +1432,7 @@ export class AIService {
         suggestion: feedback.suggestion,
         priority: this.mapPriority(feedback.priority),
         reference_url: feedback.reference_url,
+        code_snippet: feedback.code_snippet, // コードスニペットを追加
       }));
     } catch (error) {
       console.error("Failed to parse AI response:", error);
@@ -1353,7 +1463,7 @@ export class AIService {
       suggestion: feedback.suggestion,
       priority: feedback.priority,
       reference_url: feedback.reference_url,
-      // line_numberは含めない
+      code_snippet: feedback.code_snippet, // コードスニペットを追加
     }));
   }
 
