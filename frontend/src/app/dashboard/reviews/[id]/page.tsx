@@ -26,7 +26,8 @@ import {
   ChevronDown,
   GitPullRequest,
 } from "lucide-react";
-import ReviewAIChat from "@/components/ai/ReviewAIChat";
+// import ReviewAIChat from "@/components/ai/ReviewAIChat";
+import ModernReviewAIChat from "@/components/ai/ModernReviewAIChat";
 
 // Monaco Editor をクライアントサイドのみでロード
 const MonacoEditor = dynamic(() => import("react-monaco-editor"), {
@@ -478,7 +479,7 @@ export default function ReviewDetailPage({
       </Card>
       {/* AIチャットボットを追加 */}
       {!isLoading && review && (
-        <ReviewAIChat
+        <ModernReviewAIChat
           reviewId={parseInt(params.id)}
           reviewTitle={review.title}
           codeContent={

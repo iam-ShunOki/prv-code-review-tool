@@ -1,16 +1,18 @@
-// backend/src/routes/aiChatRoutes.ts (更新版)
+// backend/src/routes/aiChatRoutes.ts
 import express from "express";
 import { AIChatController } from "../controllers/AIChatController";
+import { AIChatStreamController } from "../controllers/AIChatStreamController";
 import { authenticate } from "../middlewares/authMiddleware";
 import { checkUsageLimit, logUsage } from "../middlewares/usageLimitMiddleware";
 
 const router = express.Router();
 const aiChatController = new AIChatController();
+const aiChatStreamController = new AIChatStreamController();
 
 // 認証ミドルウェアを適用
 router.use(authenticate);
 
-// AIチャットメッセージ処理エンドポイント (利用制限チェックと記録を追加)
+// 通常のAIチャットメッセージ処理エンドポイント
 router.post(
   "/message",
   checkUsageLimit("ai_chat"), // 利用制限をチェック
@@ -23,6 +25,14 @@ router.post(
     })
   ),
   aiChatController.chatMessage
+);
+
+// ストリーミング対応AIチャットメッセージ処理エンドポイント
+// 注: ストリーミングには専用のルートを使用し、利用制限チェックはコントローラー内で行う
+router.post(
+  "/message/stream",
+  authenticate, // 認証のみ適用（利用制限はコントローラ内で処理）
+  aiChatStreamController.chatMessageStream
 );
 
 export default router;

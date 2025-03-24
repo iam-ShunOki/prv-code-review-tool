@@ -2,21 +2,15 @@
 import { Request, Response } from "express";
 import { z } from "zod";
 import { AIAssistantService } from "../services/AIAssistantService";
-import { SubmissionService } from "../services/SubmissionService";
-import { FeedbackService } from "../services/FeedbackService";
-import { ReviewService } from "../services/ReviewService";
+import { UsageLimitService } from "../services/UsageLimitService";
 
 export class AIChatController {
   private aiAssistantService: AIAssistantService;
-  private submissionService: SubmissionService;
-  private feedbackService: FeedbackService;
-  private reviewService: ReviewService;
+  private usageLimitService: UsageLimitService;
 
   constructor() {
     this.aiAssistantService = new AIAssistantService();
-    this.submissionService = new SubmissionService();
-    this.feedbackService = new FeedbackService();
-    this.reviewService = new ReviewService();
+    this.usageLimitService = new UsageLimitService();
   }
 
   /**
@@ -46,57 +40,46 @@ export class AIChatController {
       });
 
       const validatedData = chatSchema.parse(req.body);
+      const userId = req.user?.id;
 
-      // レビュー情報を取得（リクエストに含まれていない場合）
-      let reviewContext = validatedData.context || { reviewTitle: "" };
-
-      if (!reviewContext.reviewTitle) {
-        // レビュータイトルを取得
-        const review = await this.reviewService.getReviewById(
-          validatedData.reviewId
-        );
-        if (review) {
-          reviewContext.reviewTitle = review.title;
-        }
+      if (!userId) {
+        res.status(401).json({
+          success: false,
+          message: "認証されていません",
+        });
+        return;
       }
 
-      // 最新のコード提出を取得（コードコンテンツがない場合）
-      let submissions: any[] = [];
-      if (!reviewContext.codeContent) {
-        submissions = await this.submissionService.getSubmissionsByReviewId(
-          validatedData.reviewId
-        );
-        if (submissions && submissions.length > 0) {
-          // 最新のコード提出を取得
-          const latestSubmission = submissions.reduce((latest, current) =>
-            current.version > latest.version ? current : latest
-          );
-          reviewContext.codeContent = latestSubmission.code_content;
-        }
+      // 利用制限をチェック - 修正: canUseFeatureメソッドを使用
+      const canUseChat = await this.usageLimitService.canUseFeature(
+        userId,
+        "ai_chat"
+      );
+
+      if (!canUseChat.canUse) {
+        res.status(403).json({
+          success: false,
+          message: "本日の利用制限に達しました",
+          data: canUseChat,
+        });
+        return;
       }
 
-      // フィードバックを取得（フィードバックがない場合）
-      if (!reviewContext.feedbacks && submissions && submissions.length > 0) {
-        const latestSubmission = submissions.reduce((latest, current) =>
-          current.version > latest.version ? current : latest
-        );
-        const feedbacks = await this.feedbackService.getFeedbacksBySubmissionId(
-          latestSubmission.id
-        );
-        reviewContext.feedbacks = feedbacks.map((feedback) => ({
-          problem_point: feedback.problem_point,
-          suggestion: feedback.suggestion,
-          priority: feedback.priority,
-        }));
-      }
+      // 利用をログに記録
+      await this.usageLimitService.logUsage(
+        userId,
+        "ai_chat",
+        validatedData.reviewId.toString()
+      );
 
-      // AIアシスタントに質問を送信
+      // AIアシスタントからのレスポンスを取得
       const response = await this.aiAssistantService.getResponse(
         validatedData.message,
         validatedData.reviewId,
-        reviewContext
+        validatedData.context || {}
       );
 
+      // レスポンスを返す
       res.status(200).json({
         success: true,
         data: {
@@ -104,6 +87,7 @@ export class AIChatController {
         },
       });
     } catch (error) {
+      // エラーハンドリング
       if (error instanceof z.ZodError) {
         res.status(400).json({
           success: false,

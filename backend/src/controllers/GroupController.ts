@@ -223,7 +223,9 @@ export class GroupController {
 
       const memberSchema = z.object({
         userId: z.number(),
-        role: z.enum(["manager", "member"]).optional(),
+        role: z
+          .enum(["manager", "leader", "member", "reviewer", "observer"])
+          .optional(),
       });
 
       const validatedData = memberSchema.parse(req.body);
@@ -321,7 +323,7 @@ export class GroupController {
       }
 
       const roleSchema = z.object({
-        role: z.enum(["manager", "member"]),
+        role: z.enum(["manager", "leader", "member", "reviewer", "observer"]),
       });
 
       const validatedData = roleSchema.parse(req.body);

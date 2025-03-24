@@ -231,8 +231,8 @@ export class AutomaticReviewCreator {
               problem_point: feedback.problem_point,
               suggestion: feedback.suggestion,
               priority: feedback.priority,
-              // line_number: feedback.line_number,
               reference_url: feedback.reference_url, // もし存在する場合
+              code_snippet: feedback.code_snippet,
             });
           }
 

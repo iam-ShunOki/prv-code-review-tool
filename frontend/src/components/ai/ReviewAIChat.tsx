@@ -420,7 +420,7 @@ const ReviewAIChat = ({
               />
               <button
                 onClick={handleSendMessage}
-                className={`p-2 rounded-r-md ${
+                className={`ml-4 p-3 rounded-r-md ${
                   isLoading || !inputValue.trim() || !canUseAIChat
                     ? "bg-gray-300 text-gray-500 cursor-not-allowed"
                     : "bg-blue-600 text-white hover:bg-blue-700"
@@ -572,7 +572,7 @@ const ReviewAIChat = ({
                   />
                   <button
                     onClick={handleSendMessage}
-                    className={`p-2 rounded-r-md ${
+                    className={`ml-4 p-2 rounded-r-md ${
                       isLoading || !inputValue.trim() || !canUseAIChat
                         ? "bg-gray-300 text-gray-500 cursor-not-allowed"
                         : "bg-blue-600 text-white hover:bg-blue-700"

@@ -325,6 +325,7 @@ export default function GroupMembersPage({
   // 役割の更新
   const handleUpdateRole = async (memberId: number, userId: number) => {
     try {
+      console.log("更新された役割:", editRole);
       const response = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL}/api/groups/${params.id}/members/${userId}/role`,
         {
@@ -370,6 +371,8 @@ export default function GroupMembersPage({
   // 役割名を表示
   const getRoleName = (role: string) => {
     switch (role) {
+      case "manager":
+        return "管理者";
       case "leader":
         return "リーダー";
       case "member":
@@ -604,6 +607,9 @@ export default function GroupMembersPage({
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
+                            <SelectItem value="manager">
+                              マネージャー(管理者)
+                            </SelectItem>
                             <SelectItem value="leader">リーダー</SelectItem>
                             <SelectItem value="member">メンバー</SelectItem>
                             <SelectItem value="reviewer">レビュアー</SelectItem>

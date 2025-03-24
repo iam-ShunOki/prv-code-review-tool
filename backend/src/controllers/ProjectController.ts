@@ -114,20 +114,11 @@ export class ProjectController {
   };
 
   /**
-   * プロジェクト詳細取得
+   * 特定のプロジェクトを取得
    */
   getProjectById = async (req: Request, res: Response): Promise<void> => {
     try {
       const projectId = parseInt(req.params.id);
-
-      if (isNaN(projectId)) {
-        res.status(400).json({
-          success: false,
-          message: "無効なプロジェクトIDです",
-        });
-        return;
-      }
-
       const project = await this.projectService.getProjectById(projectId);
 
       if (!project) {
@@ -138,14 +129,29 @@ export class ProjectController {
         return;
       }
 
+      // レビューに関連するユーザー情報があるか確認し、なければ適切に対応
+      if (project.reviews) {
+        project.reviews = project.reviews.map((review) => {
+          // userがnullの場合に最小限のダミーデータを提供
+          if (!review.user) {
+            review.user = {
+              id: 0,
+              name: "不明なユーザー",
+            } as any;
+          }
+          return review;
+        });
+      }
+
       res.status(200).json({
         success: true,
         data: project,
       });
     } catch (error) {
+      console.error("プロジェクト取得エラー:", error);
       res.status(500).json({
         success: false,
-        message: "プロジェクト詳細の取得中にエラーが発生しました",
+        message: "プロジェクトの取得中にエラーが発生しました",
       });
     }
   };

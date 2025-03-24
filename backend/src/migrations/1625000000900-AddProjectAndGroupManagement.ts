@@ -110,7 +110,7 @@ export class AddProjectAndGroupManagement1625000000900
           {
             name: "role",
             type: "enum",
-            enum: ["leader", "member", "reviewer", "observer"],
+            enum: ["manager", "leader", "member", "reviewer", "observer"],
             default: "'member'",
           },
           {
@@ -207,7 +207,7 @@ export class AddProjectAndGroupManagement1625000000900
           {
             name: "role",
             type: "enum",
-            enum: ["manager", "member"],
+            enum: ["manager", "leader", "member", "reviewer", "observer"],
             default: "'member'",
           },
           {

@@ -3,11 +3,13 @@ import { AppDataSource } from "../index";
 import { Project, ProjectStatus } from "../models/Project";
 import { UserProject, UserProjectRole } from "../models/UserProject";
 import { User } from "../models/User";
+import { Review } from "../models/Review";
 
 export class ProjectService {
   private projectRepository = AppDataSource.getRepository(Project);
   private userProjectRepository = AppDataSource.getRepository(UserProject);
   private userRepository = AppDataSource.getRepository(User);
+  private reviewRepository = AppDataSource.getRepository(Review); // Review リポジトリを追加
 
   /**
    * プロジェクトを作成する
@@ -76,7 +78,23 @@ export class ProjectService {
   async getProjectById(id: number): Promise<Project | null> {
     return this.projectRepository.findOne({
       where: { id },
-      relations: ["userProjects", "userProjects.user", "reviews"],
+      relations: [
+        "userProjects",
+        "userProjects.user",
+        "reviews",
+        "reviews.user", // ここにuser関連を明示的に追加
+      ],
+    });
+  }
+
+  /**
+   * 特定のプロジェクトに関連するレビュー一覧を取得
+   */
+  async getProjectReviews(projectId: number): Promise<Review[]> {
+    return this.reviewRepository.find({
+      where: { project_id: projectId },
+      order: { created_at: "DESC" },
+      relations: ["user"], // ここでもuser関連を明示的に指定
     });
   }
 
