@@ -1,5 +1,5 @@
 // frontend/src/components/ai/ModernReviewAIChat.tsx
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import {
   MessageCircle,
   Send,
@@ -10,25 +10,74 @@ import {
   ChevronUp,
   ThumbsUp,
   ThumbsDown,
-  Loader2, // LoaderCircleからLoader2に変更
+  Loader2,
   User,
   Bot,
 } from "lucide-react";
-import { useAIChat, Message } from "@/hooks/useAIChat";
+import { useAIChat, Message, ChatContext } from "@/hooks/useAIChat";
 import { useUsageLimit } from "@/contexts/UsageLimitContext";
 
-// タイプライター機能を単純化して改善
-const useTypewriter = (text: string, speed = 25) => {
+// タイプライター機能を完全に修正（ストリーミング対応）
+const useTypewriter = (text: string, speed = 25, enableAnimation = true) => {
   const [displayedText, setDisplayedText] = useState("");
   const [isComplete, setIsComplete] = useState(false);
   const [shouldSkip, setShouldSkip] = useState(false);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const textRef = useRef(text);
+  const positionRef = useRef(0);
 
+  // テキストが変更されたときにのみ初期化
   useEffect(() => {
+    // テキストが同じか基本的に空の場合は再初期化しない
+    if (textRef.current === text || (!textRef.current && !text)) {
+      return;
+    }
+
+    // テキストが変わった場合、参照を更新
+    textRef.current = text;
+
     // テキストが空の場合は何もしない
     if (!text) {
       setDisplayedText("");
       setIsComplete(true);
+      return;
+    }
+
+    // アニメーションが無効の場合は即時表示
+    if (!enableAnimation) {
+      setDisplayedText(text);
+      setIsComplete(true);
+      return;
+    }
+
+    // 新しいテキストが前のテキストを含む場合は続行
+    // (これがストリーミングに対応するための重要な部分)
+    if (displayedText && text.startsWith(displayedText)) {
+      // 既に表示されている部分はそのままで、追加部分だけ処理
+      positionRef.current = displayedText.length;
+      return;
+    }
+
+    // それ以外は初期化
+    clearInterval(intervalRef.current || undefined);
+    setDisplayedText("");
+    setIsComplete(false);
+    positionRef.current = 0;
+  }, [text, enableAnimation]);
+
+  // アニメーション処理
+  useEffect(() => {
+    // アニメーションが無効または既に完了している場合は処理しない
+    if (!enableAnimation || isComplete || !textRef.current) {
+      return;
+    }
+
+    // スキップが要求された場合は全テキストを表示
+    if (shouldSkip) {
+      setDisplayedText(textRef.current);
+      setIsComplete(true);
+      positionRef.current = textRef.current.length;
+      setShouldSkip(false);
       return;
     }
 
@@ -37,25 +86,18 @@ const useTypewriter = (text: string, speed = 25) => {
       clearInterval(intervalRef.current);
     }
 
-    // 初期状態をリセット
-    setDisplayedText("");
-    setIsComplete(false);
-
-    // スキップが要求された場合は全テキストを表示
-    if (shouldSkip) {
-      setDisplayedText(text);
+    // テキストが変わっていないか、既に表示が完了している場合
+    if (positionRef.current >= textRef.current.length) {
       setIsComplete(true);
-      setShouldSkip(false);
       return;
     }
 
-    let i = 0;
     // 文字を一つずつ表示するインターバル
     intervalRef.current = setInterval(() => {
-      if (i < text.length) {
-        // 一文字追加（単語単位ではなく）
-        setDisplayedText((prev) => prev + text.charAt(i));
-        i++;
+      if (positionRef.current < textRef.current.length) {
+        // 一文字追加
+        positionRef.current++;
+        setDisplayedText(textRef.current.substring(0, positionRef.current));
       } else {
         // 全て表示したらインターバルをクリア
         setIsComplete(true);
@@ -67,7 +109,7 @@ const useTypewriter = (text: string, speed = 25) => {
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [text, speed, shouldSkip]);
+  }, [text, speed, shouldSkip, isComplete, enableAnimation]);
 
   // スキップ関数
   const skipTyping = () => {
@@ -75,11 +117,24 @@ const useTypewriter = (text: string, speed = 25) => {
       clearInterval(intervalRef.current);
     }
     setShouldSkip(true);
-    setDisplayedText(text);
-    setIsComplete(true);
   };
 
-  return { displayedText, isComplete, skipTyping };
+  // ディスプレイテキストをリセット
+  const resetTyping = () => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+    }
+    positionRef.current = 0;
+    setDisplayedText("");
+    setIsComplete(false);
+  };
+
+  return {
+    displayedText,
+    isComplete,
+    skipTyping,
+    resetTyping,
+  };
 };
 
 // コンポーネントのプロップス
@@ -95,28 +150,33 @@ type ModernReviewAIChatProps = {
   }>;
 };
 
-const ModernReviewAIChat = ({
+const ModernReviewAIChat: React.FC<ModernReviewAIChatProps> = ({
   reviewId,
   reviewTitle,
   codeContent,
   feedbacks,
-}: ModernReviewAIChatProps) => {
+}) => {
   // 利用制限の取得
   const { canUseFeature, getRemainingUsage } = useUsageLimit();
   const canUseAIChat = canUseFeature("ai_chat");
   const remainingChats = getRemainingUsage("ai_chat");
 
   // カスタムフックによるAIチャット機能
-  const chatContext = {
-    reviewTitle,
-    codeContent,
-    feedbacks: feedbacks?.map((f) => ({
-      problem_point: f.problem_point,
-      suggestion: f.suggestion,
-      priority: f.priority,
-    })),
-  };
+  // ContextオブジェクトをuseMemoでメモ化
+  const chatContext = useMemo<ChatContext>(
+    () => ({
+      reviewTitle,
+      codeContent,
+      feedbacks: feedbacks?.map((f) => ({
+        problem_point: f.problem_point,
+        suggestion: f.suggestion,
+        priority: f.priority,
+      })),
+    }),
+    [reviewTitle, codeContent, feedbacks]
+  );
 
+  // useAIChatの呼び出し
   const { messages, isLoading, sendMessage, addInitialMessage, resetMessages } =
     useAIChat({
       reviewId,
@@ -150,12 +210,47 @@ const ModernReviewAIChat = ({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // 最新のメッセージに対してタイピングエフェクトを適用
-  const lastMessage = messages[messages.length - 1];
-  const lastMessageContent =
-    lastMessage?.sender === "ai" ? lastMessage.content : "";
+  // 新しい参照 - ストリーミング中のメッセージを追跡
+  const streamingMessageRef = useRef<Message | null>(null);
+
+  // タイプライターアニメーションの無効化フラグ
+  const [disableTypewriterAnimation, setDisableTypewriterAnimation] =
+    useState(false);
+
+  // 最新のメッセージが更新されたら参照を更新
+  useEffect(() => {
+    if (messages.length > 0) {
+      const latestMessage = messages[messages.length - 1];
+      if (latestMessage.sender === "ai" && latestMessage.isStreaming) {
+        streamingMessageRef.current = latestMessage;
+        // ストリーミング中はタイプライターアニメーションを無効化
+        setDisableTypewriterAnimation(true);
+      } else if (streamingMessageRef.current && !latestMessage.isStreaming) {
+        // ストリーミングが完了したら参照をクリア
+        streamingMessageRef.current = null;
+        // ストリーミングが終わったらタイプライターを有効化に戻す（必要に応じて）
+        setDisableTypewriterAnimation(false);
+      }
+    }
+  }, [messages]);
+
+  // アクティブアニメーション番号が有効かチェック
+  const isActiveAnimationValid =
+    activeAnimation !== null &&
+    activeAnimation >= 0 &&
+    activeAnimation < messages.length &&
+    messages[activeAnimation]?.sender === "ai";
+
+  // アニメーション対象のテキスト
+  const animationText = isActiveAnimationValid
+    ? messages[activeAnimation].content
+    : "";
+
+  // タイピングエフェクトのフック - ストリーミング中は無効化
   const { displayedText, isComplete, skipTyping } = useTypewriter(
-    activeAnimation === messages.length - 1 ? lastMessageContent : ""
+    animationText,
+    25,
+    !disableTypewriterAnimation
   );
 
   // remainingChatsが変更されたらローカルステートを更新
@@ -178,9 +273,12 @@ const ModernReviewAIChat = ({
   // 新しいメッセージが追加されたときにタイピングアニメーションを開始
   useEffect(() => {
     if (messages.length > 0 && messages[messages.length - 1].sender === "ai") {
-      setActiveAnimation(messages.length - 1);
+      // 最新のメッセージがストリーミング中でない場合のみアニメーションを設定
+      if (!messages[messages.length - 1].isStreaming) {
+        setActiveAnimation(messages.length - 1);
+      }
     }
-  }, [messages]);
+  }, [messages.length]);
 
   // メッセージが追加されたときに自動スクロール
   useEffect(() => {
@@ -307,6 +405,28 @@ const ModernReviewAIChat = ({
     return classes.filter(Boolean).join(" ");
   };
 
+  // メッセージ表示を処理する関数
+  const getDisplayText = (message: Message, index: number) => {
+    // ユーザーメッセージはそのまま表示
+    if (message.sender !== "ai") return message.content;
+
+    // ストリーミング中のメッセージはそのまま表示
+    if (message.isStreaming) return message.content;
+
+    // アクティブなアニメーション対象はタイプライターエフェクトで表示
+    if (index === activeAnimation && !disableTypewriterAnimation)
+      return displayedText;
+
+    // それ以外はそのまま表示
+    return message.content;
+  };
+
+  // 最新メッセージが空かどうかをチェック
+  const isLatestMessageEmpty =
+    messages.length > 0 &&
+    messages[messages.length - 1].sender === "ai" &&
+    messages[messages.length - 1].content.trim() === "";
+
   return (
     <div className="relative z-50">
       {/* フローティングアイコン */}
@@ -378,24 +498,27 @@ const ModernReviewAIChat = ({
                       "relative rounded-lg px-4 py-2 whitespace-pre-wrap",
                       message.sender === "user"
                         ? "bg-blue-600 text-white rounded-tr-none"
-                        : "bg-gray-200 text-gray-800 rounded-tl-none"
+                        : "bg-gray-200 text-gray-800 rounded-tl-none",
+                      message.isStreaming ? "border-l-4 border-blue-400" : ""
                     )}
                   >
                     {message.sender === "ai" && (
                       <div className="text-xs font-medium mb-1 text-blue-600/80">
                         AIアシスタント
+                        {message.isStreaming && (
+                          <span className="ml-2 text-blue-400">
+                            ストリーミング中...
+                          </span>
+                        )}
                       </div>
                     )}
 
-                    <p className="text-sm">
-                      {index === activeAnimation && message.sender === "ai"
-                        ? displayedText
-                        : message.content}
-                    </p>
+                    <p className="text-sm">{getDisplayText(message, index)}</p>
 
                     {message.sender === "ai" &&
                       !isComplete &&
-                      index === activeAnimation && (
+                      index === activeAnimation &&
+                      !message.isStreaming && (
                         <button
                           className="absolute -bottom-7 right-0 text-xs py-1 px-2 bg-gray-100 hover:bg-gray-200 rounded text-gray-600"
                           onClick={skipTyping}
@@ -406,7 +529,8 @@ const ModernReviewAIChat = ({
 
                     {message.sender === "ai" &&
                       isComplete &&
-                      index === messages.length - 1 && (
+                      index === messages.length - 1 &&
+                      !message.isStreaming && (
                         <div className="absolute -bottom-8 right-0 flex items-center space-x-1">
                           <button
                             className="text-xs py-1 px-2 text-gray-500 hover:text-gray-700"
@@ -444,7 +568,8 @@ const ModernReviewAIChat = ({
               </div>
             ))}
 
-            {isLoading && (
+            {/* ローディング表示 - AIの返信待ちの場合のみ表示 */}
+            {isLoading && isLatestMessageEmpty && (
               <div className="flex justify-start mb-4">
                 <div className="flex items-start">
                   <div className="h-8 w-8 bg-blue-100 rounded-full flex items-center justify-center mr-2 mt-1">
@@ -462,6 +587,7 @@ const ModernReviewAIChat = ({
                 </div>
               </div>
             )}
+
             <div ref={messagesEndRef} />
           </div>
 
@@ -580,16 +706,24 @@ const ModernReviewAIChat = ({
                           "relative rounded-lg px-3 py-2 text-sm whitespace-pre-wrap",
                           message.sender === "user"
                             ? "bg-blue-600 text-white rounded-tr-none"
-                            : "bg-gray-200 text-gray-800 rounded-tl-none"
+                            : "bg-gray-200 text-gray-800 rounded-tl-none",
+                          message.isStreaming
+                            ? "border-l-2 border-blue-400"
+                            : ""
                         )}
                       >
-                        {index === activeAnimation && message.sender === "ai"
-                          ? displayedText
-                          : message.content}
+                        {message.sender === "ai" && message.isStreaming && (
+                          <div className="absolute -top-4 left-0 text-[9px] bg-blue-100 text-blue-600 px-1 rounded">
+                            ストリーミング中...
+                          </div>
+                        )}
+
+                        {getDisplayText(message, index)}
 
                         {message.sender === "ai" &&
                           !isComplete &&
-                          index === activeAnimation && (
+                          index === activeAnimation &&
+                          !message.isStreaming && (
                             <button
                               className="absolute -bottom-6 right-0 text-[10px] py-0.5 px-1.5 bg-gray-100 hover:bg-gray-200 rounded text-gray-600"
                               onClick={skipTyping}
@@ -608,7 +742,8 @@ const ModernReviewAIChat = ({
                   </div>
                 ))}
 
-                {isLoading && (
+                {/* ローディング表示 - AIの返信待ちの場合のみ表示 */}
+                {isLoading && isLatestMessageEmpty && (
                   <div className="flex justify-start mb-3">
                     <div className="flex items-start">
                       <div className="h-6 w-6 bg-blue-100 rounded-full flex items-center justify-center mr-1.5 mt-0.5">
@@ -623,6 +758,7 @@ const ModernReviewAIChat = ({
                     </div>
                   </div>
                 )}
+
                 <div ref={messagesEndRef} />
               </div>
 

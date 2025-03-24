@@ -1,19 +1,19 @@
-// frontend/src/hooks/useAIChat.tsx
-import { useState, useCallback, useEffect } from "react";
+// src/hooks/useAIChat.ts
+import { useState, useCallback, useEffect, useRef } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { useUsageLimit } from "@/contexts/UsageLimitContext";
 import { useAuth } from "@/contexts/AuthContext";
 
-// メッセージタイプの定義
-export type Message = {
+// メッセージの型定義
+export interface Message {
   id: string;
   content: string;
   sender: "user" | "ai";
-  timestamp: Date;
-};
+  isStreaming?: boolean; // ストリーミング中かどうかのフラグを追加
+}
 
-// チャットコンテキストの型定義
-export type ChatContext = {
+// コンテキストの型定義
+export interface ChatContext {
   reviewTitle?: string;
   codeContent?: string;
   feedbacks?: Array<{
@@ -21,57 +21,69 @@ export type ChatContext = {
     suggestion: string;
     priority: string;
   }>;
-};
+}
 
-type UseAIChatProps = {
+// フックのオプション型定義
+interface UseAIChatOptions {
   reviewId: number;
   context?: ChatContext;
+  onSuccess?: () => void;
   onError?: (error: any) => void;
-  onSuccess?: (response: any) => void;
-};
+}
 
+// カスタムフック
 export const useAIChat = ({
   reviewId,
-  context,
-  onError,
+  context = {},
   onSuccess,
-}: UseAIChatProps) => {
+  onError,
+}: UseAIChatOptions) => {
+  // ステート
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const { token } = useAuth();
-  const { updateLocalUsageCount } = useUsageLimit();
+  const { updateLocalUsageCount, getUsageInfo } = useUsageLimit();
+
+  // 現在ストリーミング中のメッセージIDを追跡する参照
+  const streamingMessageId = useRef<string | null>(null);
+
+  // 累積されたテキストを保持する参照
+  const accumulatedText = useRef<string>("");
 
   // 初期メッセージを追加
   const addInitialMessage = useCallback((content: string) => {
-    const message: Message = {
+    const aiMessage: Message = {
       id: uuidv4(),
       content,
       sender: "ai",
-      timestamp: new Date(),
     };
-    setMessages([message]);
+    setMessages([aiMessage]);
   }, []);
 
-  // メッセージを送信
+  // メッセージの送信
   const sendMessage = useCallback(
     async (content: string) => {
-      // 空メッセージは送信しない
       if (!content.trim()) return;
 
-      // ユーザーメッセージを追加
-      const userMessage: Message = {
-        id: uuidv4(),
-        content,
-        sender: "user",
-        timestamp: new Date(),
-      };
-
-      setMessages((prev) => [...prev, userMessage]);
-      setIsLoading(true);
-
       try {
-        // 使用状況を記録
-        const usageInfo = useUsageLimit().getUsageInfo("ai_chat");
+        // 利用状況を取得
+        const usageInfo = getUsageInfo("ai_chat");
+
+        // ユーザーメッセージをステートに追加
+        const userMessage: Message = {
+          id: uuidv4(),
+          content,
+          sender: "user",
+        };
+
+        setMessages((prev) => [...prev, userMessage]);
+        setIsLoading(true);
+
+        // ストリーミング中のメッセージIDとテキストをリセット
+        streamingMessageId.current = null;
+        accumulatedText.current = "";
+
+        // 利用状況をローカルで即時更新（楽観的更新）
         if (usageInfo) {
           updateLocalUsageCount("ai_chat", {
             used: usageInfo.used + 1,
@@ -80,9 +92,55 @@ export const useAIChat = ({
           });
         }
 
-        // ストリーミングAPIリクエストの準備
-        const url = `${process.env.NEXT_PUBLIC_API_URL}/api/ai-chat/message/stream`;
-        const response = await fetch(url, {
+        // API リクエスト
+        // 通常のストリーミングリクエスト
+        await handleStreamingRequest(content);
+
+        // 成功コールバック
+        if (onSuccess) onSuccess();
+      } catch (error) {
+        console.error("Error sending message:", error);
+
+        // AIのエラーメッセージを追加
+        const errorMessage: Message = {
+          id: uuidv4(),
+          content:
+            error instanceof Error
+              ? `エラーが発生しました: ${error.message}`
+              : "エラーが発生しました。もう一度お試しください。",
+          sender: "ai",
+        };
+
+        setMessages((prev) => [...prev, errorMessage]);
+
+        // エラーコールバック
+        if (onError) onError(error);
+      } finally {
+        // ストリーミング完了後に確実にローディング状態を解除
+        setIsLoading(false);
+        // ストリーミングフラグをクリア
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === streamingMessageId.current
+              ? { ...msg, isStreaming: false }
+              : msg
+          )
+        );
+
+        // 参照をクリア
+        streamingMessageId.current = null;
+      }
+    },
+    [reviewId, context, updateLocalUsageCount, getUsageInfo, onSuccess, onError]
+  );
+
+  // 通常のストリーミングリクエスト処理
+  const handleStreamingRequest = async (content: string) => {
+    try {
+      // リクエストの作成
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/ai-chat/message/stream`,
+        {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -93,102 +151,120 @@ export const useAIChat = ({
             message: content,
             context,
           }),
-        });
-
-        if (!response.ok) {
-          throw new Error("APIリクエストに失敗しました");
         }
+      );
 
-        if (!response.body) {
-          throw new Error("レスポンスのボディがありません");
-        }
+      if (!response.ok) {
+        throw new Error(`APIエラー: ${response.status} ${response.statusText}`);
+      }
 
-        // ストリーミングレスポンスを処理
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
+      // レスポンスをテキストとして扱う
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error("レスポンスボディが読み取れません");
+      }
 
-        // AIのメッセージID
-        const aiMessageId = uuidv4();
+      // 新しいAIメッセージを作成
+      const aiMessageId = uuidv4();
+      streamingMessageId.current = aiMessageId;
 
-        // 空のAIメッセージを先に追加
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: aiMessageId,
-            content: "",
-            sender: "ai",
-            timestamp: new Date(),
-          },
-        ]);
-
-        let accumulatedContent = "";
-
-        const processStream = async () => {
-          try {
-            // eslint-disable-next-line no-constant-condition
-            while (true) {
-              const { done, value } = await reader.read();
-
-              if (done) {
-                break;
-              }
-
-              // 受信したチャンクをデコード
-              const chunk = decoder.decode(value, { stream: true });
-              accumulatedContent += chunk;
-
-              // AIメッセージを更新
-              setMessages((prev) =>
-                prev.map((msg) =>
-                  msg.id === aiMessageId
-                    ? { ...msg, content: accumulatedContent }
-                    : msg
-                )
-              );
-            }
-
-            // 完了時に成功コールバック
-            if (onSuccess) {
-              onSuccess({ content: accumulatedContent });
-            }
-          } catch (streamError) {
-            console.error("Stream processing error:", streamError);
-            if (onError) {
-              onError(streamError);
-            }
-          } finally {
-            setIsLoading(false);
-          }
-        };
-
-        // ストリーム処理開始
-        processStream();
-      } catch (error) {
-        console.error("AI Chat error:", error);
-
-        // エラーメッセージをチャットに表示
-        const errorMessage: Message = {
-          id: uuidv4(),
-          content:
-            "申し訳ありません、エラーが発生しました。もう一度お試しください。",
+      // メッセージをステートに追加（ストリーミングフラグをtrueに設定）
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: aiMessageId,
+          content: "",
           sender: "ai",
-          timestamp: new Date(),
-        };
+          isStreaming: true, // ストリーミング中のフラグ
+        },
+      ]);
 
-        setMessages((prev) => [...prev, errorMessage]);
-        setIsLoading(false);
+      // テキスト処理用
+      let decoder = new TextDecoder();
+      accumulatedText.current = "";
 
-        if (onError) {
-          onError(error);
+      // 更新のスロットリング用
+      let lastUpdateTime = 0;
+      const updateThreshold = 50; // ミリ秒単位の更新閾値
+
+      // ストリーミング処理
+      while (true) {
+        const { done, value } = await reader.read();
+
+        if (done) {
+          break;
+        }
+
+        // 新しいチャンクをデコード
+        const chunk = decoder.decode(value, { stream: true });
+
+        // 累積テキストに追加
+        accumulatedText.current += chunk;
+
+        // 現在の時刻
+        const now = Date.now();
+
+        // 最後の更新から閾値以上経過しているか、最初のチャンクなら更新
+        if (
+          now - lastUpdateTime >= updateThreshold ||
+          accumulatedText.current.length <= chunk.length
+        ) {
+          // メッセージを更新
+          updateMessageContent(aiMessageId, accumulatedText.current);
+          lastUpdateTime = now;
+
+          // 最初の有効なチャンクを受け取ったらローディング状態を変更開始
+          if (accumulatedText.current.trim().length > 0 && isLoading) {
+            setTimeout(() => setIsLoading(false), 100);
+          }
         }
       }
-    },
-    [reviewId, context, updateLocalUsageCount, onError, onSuccess]
-  );
 
-  // メッセージをリセット
+      // 最終的な内容で更新
+      updateMessageContent(aiMessageId, accumulatedText.current, false);
+    } catch (error) {
+      console.error("Streaming request error:", error);
+      throw error;
+    }
+  };
+
+  // メッセージ内容の更新を最適化するヘルパー関数
+  const updateMessageContent = (
+    messageId: string,
+    content: string,
+    isStillStreaming = true
+  ) => {
+    setMessages((prev) => {
+      // IDがすでに存在するかチェック
+      const messageExists = prev.some((msg) => msg.id === messageId);
+
+      if (messageExists) {
+        // 既存のメッセージを更新
+        return prev.map((msg) =>
+          msg.id === messageId
+            ? { ...msg, content, isStreaming: isStillStreaming }
+            : msg
+        );
+      } else {
+        // 万が一メッセージが見つからない場合は追加
+        return [
+          ...prev,
+          {
+            id: messageId,
+            content,
+            sender: "ai",
+            isStreaming: isStillStreaming,
+          },
+        ];
+      }
+    });
+  };
+
+  // メッセージのリセット
   const resetMessages = useCallback(() => {
     setMessages([]);
+    streamingMessageId.current = null;
+    accumulatedText.current = "";
   }, []);
 
   return {
@@ -199,5 +275,3 @@ export const useAIChat = ({
     resetMessages,
   };
 };
-
-export default useAIChat;

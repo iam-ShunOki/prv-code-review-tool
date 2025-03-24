@@ -17,6 +17,8 @@ export class AIChatStreamController {
    * AIチャットメッセージをストリーミング形式で処理
    */
   chatMessageStream = async (req: Request, res: Response): Promise<void> => {
+    let hasStartedWriting = false;
+
     try {
       // 入力バリデーション
       const chatSchema = z.object({
@@ -65,66 +67,95 @@ export class AIChatStreamController {
         return;
       }
 
-      // レビュー情報と必要なコンテキストを取得
-      // 実際の実装では、ここでレビュー情報やコード提出情報を取得する処理を追加
-
       // ストリーミングレスポンスのヘッダーを設定
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.setHeader("Transfer-Encoding", "chunked");
       res.setHeader("Cache-Control", "no-cache");
       res.setHeader("Connection", "keep-alive");
 
-      // SSE (Server-Sent Events) ヘッダーを設定する場合
-      // res.setHeader("Content-Type", "text/event-stream");
-      // res.setHeader("Cache-Control", "no-cache");
-      // res.setHeader("Connection", "keep-alive");
+      // クライアント切断を検出
+      let isClientConnected = true;
+      req.on("close", () => {
+        isClientConnected = false;
+        console.log("Client disconnected");
+      });
 
       // 利用をログに記録
       await this.usageLimitService.logUsage(
         userId,
         "ai_chat",
-        validatedData.reviewId.toString()
+        validatedData.reviewId.toString(),
+        { messageLength: validatedData.message.length }
       );
 
       // ストリーミング処理を開始
-      const streamResponse = async () => {
-        try {
-          // AIアシスタントからのレスポンスをストリーミング
-          const completion = await this.aiAssistantService.getStreamingResponse(
-            validatedData.message,
-            validatedData.reviewId,
-            validatedData.context || {}
-          );
+      console.log("Starting streaming generation process");
 
-          // 文字が生成されるたびに送信
-          for await (const chunk of completion) {
-            // チャンクがあれば送信
-            if (chunk && !res.writableEnded) {
-              res.write(chunk);
-            }
+      try {
+        // AIアシスタントからのレスポンスをストリーミング
+        const completion = await this.aiAssistantService.getStreamingResponse(
+          validatedData.message,
+          validatedData.reviewId,
+          validatedData.context || {}
+        );
+
+        // 生成されたテキストをチャンクで送信
+        for await (const chunk of completion) {
+          // クライアントが切断されていたら処理を中止
+          if (!isClientConnected) {
+            console.log(
+              "Client disconnected during processing, stopping generation"
+            );
+            break;
           }
 
-          // 処理完了
-          if (!res.writableEnded) {
-            res.end();
-          }
-        } catch (streamError) {
-          console.error("ストリーミング処理エラー:", streamError);
-
-          // エラーが発生した場合でも、まだレスポンスが終了していなければエラーメッセージを送信
-          if (!res.writableEnded) {
-            res.write("ストリーミング処理中にエラーが発生しました。");
-            res.end();
+          // チャンクがあれば送信
+          if (chunk && !res.writableEnded) {
+            res.write(chunk);
+            hasStartedWriting = true;
           }
         }
-      };
 
-      // ストリーミング処理を実行
-      streamResponse().catch((error) => {
-        console.error("ストリーミング処理の実行に失敗:", error);
-      });
+        // 処理完了
+        if (!res.writableEnded) {
+          if (!hasStartedWriting) {
+            // 何も書き込まれていない場合はエラーメッセージを送信
+            res.write("回答の生成に失敗しました。もう一度お試しください。");
+          }
+          res.end();
+        }
+
+        console.log("Streaming response completed successfully");
+      } catch (streamError) {
+        console.error("ストリーミング処理エラー:", streamError);
+
+        // エラーが発生した場合でも、まだレスポンスが終了していなければエラーメッセージを送信
+        if (!res.writableEnded) {
+          const errorMessage =
+            streamError instanceof Error
+              ? `エラーが発生しました: ${streamError.message}`
+              : "ストリーミング処理中にエラーが発生しました。";
+
+          res.write(errorMessage);
+          res.end();
+        }
+      }
     } catch (error) {
       // バリデーションエラーなどの一般的なエラーハンドリング
+      console.error("AIチャット初期化エラー:", error);
+
+      if (res.headersSent && !res.writableEnded) {
+        // ヘッダーが既に送信されている場合はテキストでエラーを送信
+        const errorMessage =
+          error instanceof Error
+            ? `エラーが発生しました: ${error.message}`
+            : "予期せぬエラーが発生しました。もう一度お試しください。";
+        res.write(errorMessage);
+        res.end();
+        return;
+      }
+
+      // ヘッダーがまだ送信されていない場合はJSONでエラーを送信
       if (error instanceof z.ZodError) {
         res.status(400).json({
           success: false,
