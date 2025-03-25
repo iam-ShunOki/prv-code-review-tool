@@ -1,0 +1,96 @@
+{
+  "criteria": [
+    {
+      "key": "code_quality",
+      "name": "コード品質",
+      "description": "コードの品質、堅牢性、エラー処理など",
+      "min_score": 0,
+      "max_score": 10,
+      "weight": 1.0,
+      "is_active": true,
+      "display_order": 1
+    },
+    {
+      "key": "readability",
+      "name": "可読性",
+      "description": "コードの読みやすさ、命名規則、コメントなど",
+      "min_score": 0,
+      "max_score": 10,
+      "weight": 1.0,
+      "is_active": true,
+      "display_order": 2
+    },
+    {
+      "key": "efficiency",
+      "name": "効率性",
+      "description": "アルゴリズムの選択、メモリと時間の効率など",
+      "min_score": 0,
+      "max_score": 10,
+      "weight": 1.0,
+      "is_active": true,
+      "display_order": 3
+    },
+    {
+      "key": "best_practices",
+      "name": "ベストプラクティス",
+      "description": "業界標準のプラクティスの採用と適用",
+      "min_score": 0,
+      "max_score": 10,
+      "weight": 1.0,
+      "is_active": true,
+      "display_order": 4
+    },
+    {
+      "key": "documentation",
+      "name": "ドキュメント",
+      "description": "コードドキュメントの質と量",
+      "min_score": 0,
+      "max_score": 10,
+      "weight": 0.8,
+      "is_active": true,
+      "display_order": 5
+    },
+    {
+      "key": "testing",
+      "name": "テスト",
+      "description": "テストカバレッジと品質",
+      "min_score": 0,
+      "max_score": 10,
+      "weight": 0.9,
+      "is_active": true,
+      "display_order": 6
+    },
+    {
+      "key": "security",
+      "name": "セキュリティ",
+      "description": "セキュリティ上の脆弱性対策",
+      "min_score": 0,
+      "max_score": 10,
+      "weight": 1.2,
+      "is_active": true,
+      "display_order": 7
+    },
+    {
+      "key": "design",
+      "name": "設計",
+      "description": "アーキテクチャとモジュール設計の適切さ",
+      "min_score": 0,
+      "max_score": 10,
+      "weight": 1.1,
+      "is_active": false,
+      "display_order": 8
+    }
+  ],
+  "level_thresholds": {
+    "A": 9.0,
+    "B": 7.0,
+    "C": 5.0,
+    "D": 3.0,
+    "E": 0.0
+  },
+  "config": {
+    "use_weighted_average": true,
+    "version": "1.0",
+    "updated_at": "2025-03-25T09:00:00Z"
+  }
+}

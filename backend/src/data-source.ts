@@ -11,6 +11,13 @@ import { Feedback } from "./models/Feedback";
 import { Evaluation } from "./models/Evaluation";
 import { CodeEmbedding } from "./models/CodeEmbedding";
 import { Session } from "./models/Session";
+import dotenv from "dotenv";
+import { NotificationSettings } from "./models/NotificationSettings";
+import { BacklogRepository } from "./models/BacklogRepository";
+import { PullRequestTracker } from "./models/PullRequestTracker";
+import { UsageLimit } from "./models/UsageLimit";
+import { UsageLog } from "./models/UsageLog";
+import { EvaluationCriteria } from "./models/EvaluationCriteria";
 import { InitialSchema1625000000000 } from "./migrations/1625000000000-InitialSchema";
 import { AddSessionsTable1625000000100 } from "./migrations/1625000000100-AddSessionsTable";
 import { AddNotificationSettingsTable1625000000200 } from "./migrations/1625000000200-AddNotificationSettingsTable";
@@ -23,12 +30,7 @@ import { AddUsageLimitsAndLogs1625000000800 } from "./migrations/1625000000800-A
 import { AddProjectAndGroupManagement1625000000900 } from "./migrations/1625000000900-AddProjectAndGroupManagement";
 import { RemoveLineNumber1625000001000 } from "./migrations/1625000001000-RemoveLineNumber";
 import { AddCodeSnippetToFeedback1625000001100 } from "./migrations/1625000001100-AddCodeSnippetToFeedback";
-import dotenv from "dotenv";
-import { NotificationSettings } from "./models/NotificationSettings";
-import { BacklogRepository } from "./models/BacklogRepository";
-import { PullRequestTracker } from "./models/PullRequestTracker";
-import { UsageLimit } from "./models/UsageLimit";
-import { UsageLog } from "./models/UsageLog";
+import { CreateEvaluationCriteria1625000001200 } from "./migrations/1625000001200-CreateEvaluationCriteria";
 
 // 環境変数の読み込み
 dotenv.config();
@@ -59,6 +61,7 @@ export const AppDataSource = new DataSource({
     PullRequestTracker,
     UsageLimit,
     UsageLog,
+    EvaluationCriteria,
   ],
   migrations: [
     InitialSchema1625000000000,
@@ -73,6 +76,7 @@ export const AppDataSource = new DataSource({
     AddProjectAndGroupManagement1625000000900,
     RemoveLineNumber1625000001000,
     AddCodeSnippetToFeedback1625000001100,
+    CreateEvaluationCriteria1625000001200,
   ],
   subscribers: [],
 
