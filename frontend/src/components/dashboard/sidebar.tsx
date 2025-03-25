@@ -18,6 +18,7 @@ import {
   GitFork,
   FolderKanban,
   UserPlus,
+  MessagesSquare,
 } from "lucide-react";
 import { UsageLimitBadge } from "@/components/usage/UsageLimitBadge";
 
@@ -69,6 +70,11 @@ export function Sidebar() {
       href: "/dashboard/reviews",
       icon: Code,
       badge: !isAdmin ? <UsageLimitBadge featureKey="code_review" /> : null,
+    },
+    {
+      name: "AIチャット",
+      href: "/dashboard/chat",
+      icon: MessagesSquare,
     },
     { name: "プロジェクト", href: "/dashboard/projects", icon: FolderKanban },
     { name: "グループ", href: "/dashboard/groups", icon: UserPlus },

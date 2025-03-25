@@ -270,9 +270,7 @@ export function ReportExportForm({
                           onClick={() => field.onChange("graphic")}
                         >
                           <FileImage className="h-8 w-8 text-purple-600 mb-2" />
-                          <span className="text-sm font-medium">
-                            グラフィック
-                          </span>
+                          <span className="text-sm font-medium">Graphic</span>
                         </div>
                       </div>
                     </FormControl>

@@ -2,14 +2,17 @@
 "use client";
 
 import { useAuth } from "@/contexts/AuthContext";
+import { useDashboardStats } from "@/hooks/useDashboardStats";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import { Code, ListChecks, BarChart, Clock, TrendingUp } from "lucide-react";
 import { UsageLimitDisplay } from "@/components/usage/UsageLimitDisplay";
+import { Skeleton } from "@/components/ui/skeleton";
 
 export default function DashboardPage() {
   const { user } = useAuth();
+  const { stats, isLoading, isAdminStats, isUserStats } = useDashboardStats();
   const isAdmin = user?.role === "admin";
 
   return (
@@ -28,7 +31,17 @@ export default function DashboardPage() {
               <h3 className="font-medium text-gray-500">
                 {isAdmin ? "未レビュー件数" : "レビュー待ち"}
               </h3>
-              <p className="text-2xl font-bold mt-2">0 件</p>
+              {isLoading ? (
+                <Skeleton className="h-8 w-20 mt-2" />
+              ) : (
+                <p className="text-2xl font-bold mt-2">
+                  {isAdmin && isAdminStats(stats)
+                    ? `${stats.pendingReviews || 0} 件`
+                    : !isAdmin && isUserStats(stats)
+                    ? `${stats.waitingReviews || 0} 件`
+                    : "0 件"}
+                </p>
+              )}
             </div>
             <div className="bg-blue-100 p-2.5 rounded-full">
               <Clock className="h-5 w-5 text-blue-600" />
@@ -42,7 +55,17 @@ export default function DashboardPage() {
               <h3 className="font-medium text-gray-500">
                 {isAdmin ? "累計レビュー数" : "フィードバック件数"}
               </h3>
-              <p className="text-2xl font-bold mt-2">0 件</p>
+              {isLoading ? (
+                <Skeleton className="h-8 w-20 mt-2" />
+              ) : (
+                <p className="text-2xl font-bold mt-2">
+                  {isAdmin && isAdminStats(stats)
+                    ? `${stats.totalReviews || 0} 件`
+                    : !isAdmin && isUserStats(stats)
+                    ? `${stats.feedbackCount || 0} 件`
+                    : "0 件"}
+                </p>
+              )}
             </div>
             <div className="bg-green-100 p-2.5 rounded-full">
               <ListChecks className="h-5 w-5 text-green-600" />
@@ -56,9 +79,19 @@ export default function DashboardPage() {
               <h3 className="font-medium text-gray-500">
                 {isAdmin ? "登録社員数" : "現在のレベル"}
               </h3>
-              <p className="text-2xl font-bold mt-2">
-                {isAdmin ? "0 名" : "C"}
-              </p>
+              {isLoading ? (
+                <Skeleton className="h-8 w-20 mt-2" />
+              ) : (
+                <p className="text-2xl font-bold mt-2">
+                  {isAdmin && isAdminStats(stats)
+                    ? `${stats.registeredEmployees || 0} 名`
+                    : !isAdmin && isUserStats(stats)
+                    ? stats.currentLevel || "C"
+                    : isAdmin
+                    ? "0 名"
+                    : "C"}
+                </p>
+              )}
             </div>
             <div className="bg-purple-100 p-2.5 rounded-full">
               <BarChart className="h-5 w-5 text-purple-600" />
@@ -66,8 +99,9 @@ export default function DashboardPage() {
           </div>
         </Card>
       </div>
+
       {isAdmin ? (
-        <div className="grid grid-cols-1 md:grid-cols-3C gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {/* クイックアクセス */}
           <div className="col-span-1 md:col-span-2">
             <h2 className="text-xl font-bold mb-4">クイックアクセス</h2>

@@ -11,11 +11,11 @@ import {
   ThumbsUp,
   ThumbsDown,
   Loader2,
-  User,
-  Bot,
 } from "lucide-react";
 import { useAIChat, Message, ChatContext } from "@/hooks/useAIChat";
 import { useUsageLimit } from "@/contexts/UsageLimitContext";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 // タイプライター機能を完全に修正（ストリーミング対応）
 const useTypewriter = (text: string, speed = 25, enableAnimation = true) => {
@@ -446,9 +446,6 @@ const ModernReviewAIChat: React.FC<ModernReviewAIChatProps> = ({
           {/* ヘッダー */}
           <header className="bg-blue-600 text-white p-4 flex justify-between items-center shadow-md">
             <div className="flex items-center">
-              <div className="h-8 w-8 bg-white rounded-full flex items-center justify-center mr-2">
-                <Bot size={20} className="text-blue-600" />
-              </div>
               <div>
                 <h3 className="font-medium">AIアシスタント</h3>
                 <p className="text-xs text-white/80">
@@ -487,12 +484,6 @@ const ModernReviewAIChat: React.FC<ModernReviewAIChatProps> = ({
                 }`}
               >
                 <div className="flex items-start max-w-[80%]">
-                  {message.sender === "ai" && (
-                    <div className="h-8 w-8 bg-blue-100 rounded-full flex items-center justify-center mr-2 mt-1">
-                      <Bot size={16} className="text-blue-600" />
-                    </div>
-                  )}
-
                   <div
                     className={cn(
                       "relative rounded-lg px-4 py-2 whitespace-pre-wrap",
@@ -513,8 +504,12 @@ const ModernReviewAIChat: React.FC<ModernReviewAIChatProps> = ({
                       </div>
                     )}
 
-                    <p className="text-sm">{getDisplayText(message, index)}</p>
-
+                    {/* <p className="text-sm">{getDisplayText(message, index)}</p> */}
+                    <div className="text-sm">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {getDisplayText(message, index)}
+                      </ReactMarkdown>
+                    </div>
                     {message.sender === "ai" &&
                       !isComplete &&
                       index === activeAnimation &&
@@ -558,12 +553,6 @@ const ModernReviewAIChat: React.FC<ModernReviewAIChatProps> = ({
                         </div>
                       )}
                   </div>
-
-                  {message.sender === "user" && (
-                    <div className="h-8 w-8 bg-blue-600 rounded-full flex items-center justify-center ml-2 mt-1">
-                      <User size={16} className="text-white" />
-                    </div>
-                  )}
                 </div>
               </div>
             ))}
@@ -572,9 +561,6 @@ const ModernReviewAIChat: React.FC<ModernReviewAIChatProps> = ({
             {isLoading && isLatestMessageEmpty && (
               <div className="flex justify-start mb-4">
                 <div className="flex items-start">
-                  <div className="h-8 w-8 bg-blue-100 rounded-full flex items-center justify-center mr-2 mt-1">
-                    <Bot size={16} className="text-blue-600" />
-                  </div>
                   <div className="bg-gray-200 rounded-lg rounded-tl-none px-4 py-3">
                     <div className="text-xs font-medium mb-1 text-blue-600/80">
                       AIアシスタント
@@ -643,9 +629,6 @@ const ModernReviewAIChat: React.FC<ModernReviewAIChatProps> = ({
             onMouseDown={handleMouseDown}
           >
             <div className="flex items-center">
-              <div className="h-7 w-7 bg-white rounded-full flex items-center justify-center mr-2">
-                <Bot size={14} className="text-blue-600" />
-              </div>
               <div>
                 <h3 className="font-medium text-sm">AIアシスタント</h3>
                 {!isMinimized && (
@@ -695,12 +678,6 @@ const ModernReviewAIChat: React.FC<ModernReviewAIChatProps> = ({
                     }`}
                   >
                     <div className="flex items-start max-w-[85%]">
-                      {message.sender === "ai" && (
-                        <div className="h-6 w-6 bg-blue-100 rounded-full flex items-center justify-center mr-1.5 mt-0.5">
-                          <Bot size={12} className="text-blue-600" />
-                        </div>
-                      )}
-
                       <div
                         className={cn(
                           "relative rounded-lg px-3 py-2 text-sm whitespace-pre-wrap",
@@ -732,12 +709,6 @@ const ModernReviewAIChat: React.FC<ModernReviewAIChatProps> = ({
                             </button>
                           )}
                       </div>
-
-                      {message.sender === "user" && (
-                        <div className="h-6 w-6 bg-blue-600 rounded-full flex items-center justify-center ml-1.5 mt-0.5">
-                          <User size={12} className="text-white" />
-                        </div>
-                      )}
                     </div>
                   </div>
                 ))}
@@ -746,9 +717,6 @@ const ModernReviewAIChat: React.FC<ModernReviewAIChatProps> = ({
                 {isLoading && isLatestMessageEmpty && (
                   <div className="flex justify-start mb-3">
                     <div className="flex items-start">
-                      <div className="h-6 w-6 bg-blue-100 rounded-full flex items-center justify-center mr-1.5 mt-0.5">
-                        <Bot size={12} className="text-blue-600" />
-                      </div>
                       <div className="bg-gray-200 rounded-lg rounded-tl-none px-3 py-2">
                         <div className="flex items-center">
                           <Loader2 size={12} className="animate-spin mr-1" />

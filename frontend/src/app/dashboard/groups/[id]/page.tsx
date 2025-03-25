@@ -410,8 +410,6 @@ export default function GroupDetailPage({
               </div>
             </CardHeader>
             <CardContent>
-              <TableCell>{review.user?.name || "不明なユーザー"}</TableCell>
-              // 以下は完全なレビューテーブル部分の修正例です
               {group.reviews && group.reviews.length > 0 ? (
                 <Table>
                   <TableHeader>

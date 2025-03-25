@@ -255,7 +255,9 @@ import aiChatRoutes from "./routes/aiChatRoutes";
 import usageLimitRoutes from "./routes/usageLimitRoutes";
 import projectRoutes from "./routes/projectRoutes";
 import groupRoutes from "./routes/groupRoutes";
-
+import dashboardRoutes from "./routes/dashboardRoutes";
+import chatRoutes from "./routes/chatRoutes";
+import learningChatRoutes from "./routes/learningChatRoutes";
 // ルートの登録
 app.use("/api/auth", authRoutes);
 app.use("/api/reviews", reviewRoutes);
@@ -274,7 +276,9 @@ app.use("/api/ai-chat", aiChatRoutes);
 app.use("/api/usage-limits", usageLimitRoutes);
 app.use("/api/projects", projectRoutes);
 app.use("/api/groups", groupRoutes);
-
+app.use("/api/dashboard", dashboardRoutes);
+app.use("/api/chat", chatRoutes);
+app.use("/api/learning-chat", learningChatRoutes);
 // エラーハンドリング強化
 app.use(
   (

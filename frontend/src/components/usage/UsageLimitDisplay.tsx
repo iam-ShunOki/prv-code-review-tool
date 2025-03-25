@@ -138,9 +138,6 @@ export function UsageLimitDisplay() {
     <Card>
       <CardHeader className="pb-2 flex flex-row items-center justify-between">
         <CardTitle className="text-lg">本日の利用状況</CardTitle>
-        <Button variant="ghost" size="sm" onClick={refreshUsageLimits}>
-          更新
-        </Button>
       </CardHeader>
       <CardContent>
         <div className="space-y-6">
