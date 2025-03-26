@@ -28,7 +28,9 @@ import {
 } from "@/components/ui/form";
 import { useToast } from "@/components/ui/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Users, Loader2 } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { MemberSelector } from "@/components/members/MemberSelector";
 
 // フォームのバリデーションスキーマ
 const groupSchema = z.object({
@@ -38,14 +40,18 @@ const groupSchema = z.object({
 
 type GroupFormValues = z.infer<typeof groupSchema>;
 
-// グループの型定義
-interface Group {
+// メンバーの役割定義
+interface SelectedMember {
   id: number;
   name: string;
-  description: string;
-  created_at: string;
-  updated_at: string;
+  role: string;
 }
+
+// グループメンバーの役割オプション
+const groupRoles = [
+  { value: "manager", label: "管理者" },
+  { value: "member", label: "メンバー" },
+];
 
 export default function EditGroupPage({ params }: { params: { id: string } }) {
   const router = useRouter();
@@ -53,7 +59,10 @@ export default function EditGroupPage({ params }: { params: { id: string } }) {
   const { token, user } = useAuth();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-  const [group, setGroup] = useState<Group | null>(null);
+  const [group, setGroup] = useState<any | null>(null);
+  const [selectedMembers, setSelectedMembers] = useState<SelectedMember[]>([]);
+  const [currentMembers, setCurrentMembers] = useState<SelectedMember[]>([]);
+  const [activeTab, setActiveTab] = useState("basic");
 
   // フォームの初期化
   const form = useForm<GroupFormValues>({
@@ -64,14 +73,15 @@ export default function EditGroupPage({ params }: { params: { id: string } }) {
     },
   });
 
-  // グループ情報を取得して初期値をセット
+  // グループ情報とメンバーを取得
   useEffect(() => {
-    const fetchGroup = async () => {
+    const fetchGroupData = async () => {
       if (!token) return;
 
       setIsLoading(true);
       try {
-        const response = await fetch(
+        // グループ基本情報を取得
+        const groupResponse = await fetch(
           `${process.env.NEXT_PUBLIC_API_URL}/api/groups/${params.id}`,
           {
             headers: {
@@ -80,20 +90,45 @@ export default function EditGroupPage({ params }: { params: { id: string } }) {
           }
         );
 
-        if (!response.ok) {
+        if (!groupResponse.ok) {
           throw new Error("グループ情報の取得に失敗しました");
         }
 
-        const data = await response.json();
-        setGroup(data.data);
+        const groupData = await groupResponse.json();
+        setGroup(groupData.data);
 
         // フォームに初期値をセット
         form.reset({
-          name: data.data.name,
-          description: data.data.description || "",
+          name: groupData.data.name,
+          description: groupData.data.description || "",
         });
+
+        // グループメンバーを取得
+        const membersResponse = await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL}/api/groups/${params.id}/members`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }
+        );
+
+        if (!membersResponse.ok) {
+          throw new Error("メンバー情報の取得に失敗しました");
+        }
+
+        const membersData = await membersResponse.json();
+
+        // 現在のメンバーを設定
+        const currentMembers = (membersData.data || []).map((member: any) => ({
+          id: member.user_id,
+          name: member.user.name,
+          role: member.role,
+        }));
+
+        setCurrentMembers(currentMembers);
       } catch (error) {
-        console.error("グループ詳細取得エラー:", error);
+        console.error("グループデータ取得エラー:", error);
         toast({
           title: "エラー",
           description: "グループ情報の取得に失敗しました",
@@ -104,11 +139,11 @@ export default function EditGroupPage({ params }: { params: { id: string } }) {
       }
     };
 
-    fetchGroup();
-  }, [params.id, token, toast, form]);
+    fetchGroupData();
+  }, [params.id, token, form, toast]);
 
   // 管理者権限チェック
-  if (user?.role !== "admin") {
+  if (!isLoading && user?.role !== "admin") {
     return (
       <div className="text-center p-10">
         <h2 className="text-xl font-semibold">管理者権限が必要です</h2>
@@ -133,10 +168,11 @@ export default function EditGroupPage({ params }: { params: { id: string } }) {
     setIsSubmitting(true);
 
     try {
+      // グループ情報更新リクエスト
       const response = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL}/api/groups/${group.id}`,
         {
-          method: "PUT",
+          method: "PATCH",
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${token}`,
@@ -149,6 +185,55 @@ export default function EditGroupPage({ params }: { params: { id: string } }) {
         const errorData = await response.json();
         throw new Error(errorData.message || "グループの更新に失敗しました");
       }
+
+      // 新しく追加するメンバーの処理
+      if (selectedMembers.length > 0) {
+        const memberPromises = selectedMembers.map((member) =>
+          fetch(
+            `${process.env.NEXT_PUBLIC_API_URL}/api/groups/${group.id}/members`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify({
+                userId: member.id,
+                role: member.role,
+              }),
+            }
+          )
+        );
+
+        await Promise.all(memberPromises);
+      }
+
+      // 現在のメンバーの役割更新が必要な場合
+      const roleUpdatePromises = currentMembers.map((member) => {
+        // 役割が変更されているかチェック
+        const initialMember = (group.members || []).find(
+          (m: any) => m.user_id === member.id && m.role !== member.role
+        );
+
+        if (initialMember) {
+          return fetch(
+            `${process.env.NEXT_PUBLIC_API_URL}/api/groups/${group.id}/members/${member.id}/role`,
+            {
+              method: "PATCH",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify({
+                role: member.role,
+              }),
+            }
+          );
+        }
+        return Promise.resolve();
+      });
+
+      await Promise.all(roleUpdatePromises);
 
       toast({
         title: "グループ更新完了",
@@ -176,12 +261,7 @@ export default function EditGroupPage({ params }: { params: { id: string } }) {
     return (
       <div className="flex justify-center items-center h-64">
         <div className="text-center">
-          <div
-            className="spinner-border animate-spin inline-block w-8 h-8 border-4 rounded-full"
-            role="status"
-          >
-            <span className="visually-hidden"></span>
-          </div>
+          <Loader2 className="h-8 w-8 animate-spin mx-auto" />
           <p className="mt-2">グループ情報を読み込み中...</p>
         </div>
       </div>
@@ -220,69 +300,140 @@ export default function EditGroupPage({ params }: { params: { id: string } }) {
         <h1 className="text-2xl font-bold">グループ編集</h1>
       </div>
 
-      <Form {...form}>
-        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
-          <Card>
-            <CardHeader>
-              <CardTitle>グループ情報</CardTitle>
-              <CardDescription>
-                グループの情報を編集してください
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <FormField
-                control={form.control}
-                name="name"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>
-                      グループ名<span className="text-red-500">*</span>
-                    </FormLabel>
-                    <FormControl>
-                      <Input placeholder="グループ名" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <TabsList className="grid w-full grid-cols-2">
+          <TabsTrigger value="basic">基本情報</TabsTrigger>
+          <TabsTrigger value="members" className="flex items-center">
+            <Users className="h-4 w-4 mr-2" /> 新規メンバー追加
+            {selectedMembers.length > 0 && (
+              <span className="ml-1 text-xs bg-primary text-primary-foreground rounded-full px-2 py-0.5">
+                {selectedMembers.length}
+              </span>
+            )}
+          </TabsTrigger>
+        </TabsList>
 
-              <FormField
-                control={form.control}
-                name="description"
-                render={({ field }) => (
+        <Form {...form}>
+          <form
+            onSubmit={form.handleSubmit(onSubmit)}
+            className="space-y-8 mt-6"
+          >
+            <TabsContent value="basic">
+              <Card>
+                <CardHeader>
+                  <CardTitle>グループ情報</CardTitle>
+                  <CardDescription>
+                    グループの情報を編集してください
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  <FormField
+                    control={form.control}
+                    name="name"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>
+                          グループ名<span className="text-red-500">*</span>
+                        </FormLabel>
+                        <FormControl>
+                          <Input placeholder="グループ名" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name="description"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>説明</FormLabel>
+                        <FormControl>
+                          <Textarea
+                            placeholder="グループの説明やメンバーの特徴など"
+                            className="min-h-32"
+                            {...field}
+                          />
+                        </FormControl>
+                        <FormDescription>
+                          グループの目的や活動内容について記述してください
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </CardContent>
+                <CardFooter className="flex justify-between">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => router.push(`/dashboard/groups/${group.id}`)}
+                  >
+                    キャンセル
+                  </Button>
+                  {selectedMembers.length > 0 ? (
+                    <Button
+                      type="button"
+                      onClick={() => setActiveTab("members")}
+                    >
+                      次へ
+                    </Button>
+                  ) : (
+                    <Button type="submit" disabled={isSubmitting}>
+                      {isSubmitting ? "更新中..." : "グループを更新"}
+                    </Button>
+                  )}
+                </CardFooter>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="members">
+              <Card>
+                <CardHeader>
+                  <CardTitle>メンバー追加</CardTitle>
+                  <CardDescription>
+                    新しくグループに追加するメンバーを選択してください
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
                   <FormItem>
-                    <FormLabel>説明</FormLabel>
+                    <FormLabel>新規メンバー</FormLabel>
                     <FormControl>
-                      <Textarea
-                        placeholder="グループの説明やメンバーの特徴など"
-                        className="min-h-32"
-                        {...field}
+                      <MemberSelector
+                        token={token || ""}
+                        selectedMembers={selectedMembers}
+                        onMembersChange={setSelectedMembers}
+                        availableRoles={groupRoles}
+                        defaultRole="member"
+                        showFilters={true}
+                        excludeUserIds={currentMembers.map(
+                          (member) => member.id
+                        )}
                       />
                     </FormControl>
                     <FormDescription>
-                      グループの目的や活動内容について記述してください
+                      グループに追加するメンバーを選択し、役割を設定してください
                     </FormDescription>
-                    <FormMessage />
                   </FormItem>
-                )}
-              />
-            </CardContent>
-
-            <CardFooter className="flex justify-between">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => router.push(`/dashboard/groups/${group.id}`)}
-              >
-                キャンセル
-              </Button>
-              <Button type="submit" disabled={isSubmitting}>
-                {isSubmitting ? "更新中..." : "グループを更新"}
-              </Button>
-            </CardFooter>
-          </Card>
-        </form>
-      </Form>
+                </CardContent>
+                <CardFooter className="flex justify-between">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setActiveTab("basic")}
+                  >
+                    戻る
+                  </Button>
+                  <Button type="submit" disabled={isSubmitting}>
+                    {isSubmitting ? "更新中..." : "グループを更新"}
+                  </Button>
+                </CardFooter>
+              </Card>
+            </TabsContent>
+          </form>
+        </Form>
+      </Tabs>
     </div>
   );
 }

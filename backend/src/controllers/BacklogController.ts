@@ -288,4 +288,61 @@ export class BacklogController {
       }
     }
   };
+
+  /**
+   * ブランチ一覧を取得
+   */
+  getBranches = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const projectIdOrKey = req.params.projectId;
+      const repoIdOrName = req.params.repoId;
+
+      const branches = await this.backlogService.getBranches(
+        projectIdOrKey,
+        repoIdOrName
+      );
+
+      res.status(200).json({
+        success: true,
+        data: branches,
+      });
+    } catch (error) {
+      console.error("ブランチ一覧取得エラー:", error);
+      res.status(500).json({
+        success: false,
+        message: "ブランチ一覧の取得中にエラーが発生しました",
+        error: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
+  };
+
+  /**
+   * ファイルツリーを取得
+   */
+  getFileTree = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const projectIdOrKey = req.params.projectId;
+      const repoIdOrName = req.params.repoId;
+      const { branch = "master", path = "" } = req.query;
+
+      const fileTree = await this.backlogService.getFileTree(
+        projectIdOrKey,
+        repoIdOrName,
+        branch as string,
+        path as string
+      );
+
+      res.status(200).json({
+        success: true,
+        data: fileTree,
+      });
+    } catch (error) {
+      console.error("ファイルツリー取得エラー:", error);
+      res.status(500).json({
+        success: false,
+        message: "ファイルツリーの取得中にエラーが発生しました",
+        error: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
+  };
 }

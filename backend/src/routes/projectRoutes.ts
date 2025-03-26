@@ -47,4 +47,7 @@ router.patch(
   projectController.updateMemberRole
 );
 
+// レビュー関連
+router.get("/:id/reviews", authenticate, projectController.getProjectReviews);
+
 export default router;

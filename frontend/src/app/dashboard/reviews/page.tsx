@@ -30,6 +30,7 @@ import {
   Search,
   Filter,
   Briefcase,
+  Folder, // Folderアイコンを追加
 } from "lucide-react"; // アイコン追加
 import {
   Pagination,
@@ -49,7 +50,10 @@ interface Review {
   status: "pending" | "in_progress" | "completed";
   created_at: string;
   updated_at: string;
-  project_id: number | null;
+  user: {
+    id: number;
+    name: string;
+  };
   project?: {
     id: number;
     name: string;
@@ -180,7 +184,7 @@ export default function ReviewsPage() {
     // プロジェクトでフィルタリング
     if (projectId) {
       filtered = filtered.filter(
-        (review) => review.project_id === parseInt(projectId)
+        (review) => review.project && review.project.id === parseInt(projectId)
       );
     }
 
@@ -381,14 +385,14 @@ export default function ReviewsPage() {
               >
                 <SelectTrigger className="w-full">
                   <div className="flex items-center">
-                    <Briefcase className="mr-2 h-4 w-4" />
-                    <SelectValue placeholder="プロジェクト" />
+                    <Folder className="mr-2 h-4 w-4" />
+                    <SelectValue placeholder="プロジェクトで絞り込み" />
                   </div>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="">すべてのプロジェクト</SelectItem>
                   {projects.map((project) => (
-                    <SelectItem key={project.id} value={project.id.toString()}>
+                    <SelectItem key={project.id} value={String(project.id)}>
                       {project.name}
                     </SelectItem>
                   ))}
@@ -461,10 +465,18 @@ export default function ReviewsPage() {
                     <div className="flex flex-col sm:flex-row sm:items-center gap-2">
                       <span>作成日: {formatDate(review.created_at)}</span>
                       {review.project && (
-                        <span className="flex items-center">
-                          <Briefcase className="h-3 w-3 mr-1" />
-                          {review.project.name}
-                        </span>
+                        <div className="flex items-center mt-1 sm:mt-0">
+                          <Folder className="h-3 w-3 mr-1 text-gray-500" />
+                          <span className="text-xs text-gray-600">
+                            プロジェクト:
+                            <Link
+                              href={`/dashboard/projects/${review.project.id}`}
+                              className="text-blue-600 hover:underline ml-1"
+                            >
+                              {review.project.name}
+                            </Link>
+                          </span>
+                        </div>
                       )}
                     </div>
                     <Button
@@ -483,32 +495,34 @@ export default function ReviewsPage() {
           </div>
 
           {/* ページネーション */}
-          <div className="fixed bottom-0 left-0 right-0 p-4">
-            <Pagination>
-              <PaginationContent>
-                {/* 前のページへのリンク */}
-                {currentPage > 1 && (
-                  <PaginationItem>
-                    <PaginationPrevious
-                      onClick={() => setCurrentPage(currentPage - 1)}
-                    />
-                  </PaginationItem>
-                )}
+          {totalPages > 1 && (
+            <div className="mt-6">
+              <Pagination>
+                <PaginationContent>
+                  {/* 前のページへのリンク */}
+                  {currentPage > 1 && (
+                    <PaginationItem>
+                      <PaginationPrevious
+                        onClick={() => setCurrentPage(currentPage - 1)}
+                      />
+                    </PaginationItem>
+                  )}
 
-                {/* ページ番号リンク */}
-                {renderPaginationLinks()}
+                  {/* ページ番号リンク */}
+                  {renderPaginationLinks()}
 
-                {/* 次のページへのリンク */}
-                {currentPage < totalPages && (
-                  <PaginationItem>
-                    <PaginationNext
-                      onClick={() => setCurrentPage(currentPage + 1)}
-                    />
-                  </PaginationItem>
-                )}
-              </PaginationContent>
-            </Pagination>
-          </div>
+                  {/* 次のページへのリンク */}
+                  {currentPage < totalPages && (
+                    <PaginationItem>
+                      <PaginationNext
+                        onClick={() => setCurrentPage(currentPage + 1)}
+                      />
+                    </PaginationItem>
+                  )}
+                </PaginationContent>
+              </Pagination>
+            </div>
+          )}
         </>
       )}
     </div>

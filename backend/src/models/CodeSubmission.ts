@@ -1,16 +1,24 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, OneToMany, JoinColumn } from 'typeorm';
-import { Review } from './Review';
-import { Feedback } from './Feedback';
-import { Evaluation } from './Evaluation';
-import { CodeEmbedding } from './CodeEmbedding';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  CreateDateColumn,
+  ManyToOne,
+  OneToMany,
+  JoinColumn,
+} from "typeorm";
+import { Review } from "./Review";
+import { Feedback } from "./Feedback";
+import { Evaluation } from "./Evaluation";
+import { CodeEmbedding } from "./CodeEmbedding";
 
 export enum SubmissionStatus {
-  SUBMITTED = 'submitted',
-  REVIEWED = 'reviewed',
-  REVISED = 'revised'
+  SUBMITTED = "submitted",
+  REVIEWED = "reviewed",
+  REVISED = "revised",
 }
 
-@Entity('code_submissions')
+@Entity("code_submissions")
 export class CodeSubmission {
   @PrimaryGeneratedColumn()
   id: number;
@@ -18,16 +26,16 @@ export class CodeSubmission {
   @Column()
   review_id: number;
 
-  @Column({ type: 'text' })
+  @Column({ type: "text" })
   code_content: string;
 
-  @Column({ type: 'text', nullable: true })
+  @Column({ type: "text", nullable: true })
   expectation: string;
 
   @Column({
-    type: 'enum',
+    type: "enum",
     enum: SubmissionStatus,
-    default: SubmissionStatus.SUBMITTED
+    default: SubmissionStatus.SUBMITTED,
   })
   status: SubmissionStatus;
 
@@ -37,16 +45,16 @@ export class CodeSubmission {
   @CreateDateColumn()
   created_at: Date;
 
-  @ManyToOne(() => Review, review => review.submissions)
-  @JoinColumn({ name: 'review_id' })
+  @ManyToOne(() => Review, (review) => review.submissions)
+  @JoinColumn({ name: "review_id" })
   review: Review;
 
-  @OneToMany(() => Feedback, feedback => feedback.submission)
+  @OneToMany(() => Feedback, (feedback) => feedback.submission)
   feedbacks: Feedback[];
 
-  @OneToMany(() => Evaluation, evaluation => evaluation.submission)
+  @OneToMany(() => Evaluation, (evaluation) => evaluation.submission)
   evaluations: Evaluation[];
 
-  @OneToMany(() => CodeEmbedding, embedding => embedding.submission)
+  @OneToMany(() => CodeEmbedding, (embedding) => embedding.submission)
   embeddings: CodeEmbedding[];
 }

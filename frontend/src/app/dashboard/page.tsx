@@ -101,7 +101,7 @@ export default function DashboardPage() {
       </div>
 
       {isAdmin ? (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* クイックアクセス */}
           <div className="col-span-1 md:col-span-2">
             <h2 className="text-xl font-bold mb-4">クイックアクセス</h2>

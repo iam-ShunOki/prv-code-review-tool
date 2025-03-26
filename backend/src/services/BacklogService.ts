@@ -879,6 +879,124 @@ ${latestSubmission.expectation || "なし"}
   }
 
   /**
+   * ブランチ一覧を取得
+   */
+  async getBranches(
+    projectIdOrKey: string,
+    repoIdOrName: string
+  ): Promise<any[]> {
+    try {
+      console.log(`Fetching branches for ${projectIdOrKey}/${repoIdOrName}`);
+      const response = await axios.get(
+        `${this.baseUrl}/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/branches`,
+        {
+          params: {
+            apiKey: this.apiKey,
+          },
+        }
+      );
+
+      // 結果のフォーマットを整形
+      return response.data.map((branch: any) => ({
+        id: branch.id,
+        name: branch.name,
+        isDefault: Boolean(branch.isDefault),
+        lastCommit: branch.lastCommit
+          ? {
+              id: branch.lastCommit.id,
+              message: branch.lastCommit.message,
+              authorName: branch.lastCommit.author.name,
+              authorEmail: branch.lastCommit.author.mailAddress,
+              createdAt: branch.lastCommit.created,
+            }
+          : null,
+      }));
+    } catch (error) {
+      console.error("Backlog API - ブランチ一覧取得エラー:", error);
+      throw new Error("ブランチ一覧の取得に失敗しました");
+    }
+  }
+
+  /**
+   * ファイルツリーを取得
+   */
+  async getFileTree(
+    projectIdOrKey: string,
+    repoIdOrName: string,
+    branch: string = "master",
+    path: string = ""
+  ): Promise<any> {
+    try {
+      console.log(
+        `Fetching file tree for ${projectIdOrKey}/${repoIdOrName}/${branch}${
+          path ? "/" + path : ""
+        }`
+      );
+
+      const response = await axios.get(
+        `${
+          this.baseUrl
+        }/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/tree/${encodeURIComponent(
+          branch
+        )}`,
+        {
+          params: {
+            apiKey: this.apiKey,
+            path: path,
+          },
+        }
+      );
+
+      // 結果のフォーマットを整形
+      return response.data.map((item: any) => ({
+        name: item.name,
+        type: item.type, // "file" or "directory"
+        size: item.size,
+        path: item.path,
+        revision: item.revision,
+      }));
+    } catch (error) {
+      console.error("Backlog API - ファイルツリー取得エラー:", error);
+      throw new Error("ファイルツリーの取得に失敗しました");
+    }
+  }
+
+  /**
+   * ファイルコンテンツを取得
+   */
+  async getFileContent(
+    projectIdOrKey: string,
+    repoIdOrName: string,
+    branch: string = "master",
+    filePath: string
+  ): Promise<string> {
+    try {
+      console.log(
+        `Fetching file content for ${projectIdOrKey}/${repoIdOrName}/${branch}/${filePath}`
+      );
+
+      const response = await axios.get(
+        `${
+          this.baseUrl
+        }/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/raw/${encodeURIComponent(
+          branch
+        )}/${encodeURIComponent(filePath)}`,
+        {
+          params: {
+            apiKey: this.apiKey,
+          },
+          responseType: "text",
+        }
+      );
+
+      return response.data;
+    } catch (error) {
+      console.error("Backlog API - ファイルコンテンツ取得エラー:", error);
+      throw new Error("ファイルコンテンツの取得に失敗しました");
+    }
+  }
+
+  /**
    * Convert status string to Backlog status ID
    */
   private getPullRequestStatusId(status: "open" | "closed" | "merged"): number {

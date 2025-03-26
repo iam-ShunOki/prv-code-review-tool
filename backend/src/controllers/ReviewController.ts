@@ -100,7 +100,9 @@ export class ReviewController {
   };
 
   /**
-   * レビュー一覧取得
+   * レビュー一覧を取得
+   * - 管理者: すべてのレビューを取得
+   * - 一般ユーザー: 自分のレビューと自分が所属するプロジェクトのレビューを取得
    */
   getReviews = async (req: Request, res: Response): Promise<void> => {
     try {
@@ -115,25 +117,29 @@ export class ReviewController {
         return;
       }
 
-      // 管理者の場合は全てのレビュー、そうでない場合は自分のレビューのみ取得
+      // 管理者の場合はすべてのレビューを取得
+      // 一般ユーザーの場合は自分のレビューと自分が所属するプロジェクトのレビューを取得
       const reviews = isAdmin
         ? await this.reviewService.getAllReviews()
-        : await this.reviewService.getUserReviews(userId);
+        : await this.reviewService.getUserAccessibleReviews(userId);
 
       res.status(200).json({
         success: true,
         data: reviews,
       });
     } catch (error) {
+      console.error("レビュー一覧取得エラー:", error);
       res.status(500).json({
         success: false,
-        message: "レビュー取得中にエラーが発生しました",
+        message: "レビュー一覧の取得中にエラーが発生しました",
       });
     }
   };
 
   /**
-   * 特定のレビュー取得
+   * レビュー詳細を取得
+   * - 管理者: すべてのレビューの詳細を取得可能
+   * - 一般ユーザー: 自分のレビューと自分が所属するプロジェクトのレビューの詳細を取得可能
    */
   getReviewById = async (req: Request, res: Response): Promise<void> => {
     try {
@@ -149,7 +155,7 @@ export class ReviewController {
         return;
       }
 
-      // レビュー取得
+      // レビュー詳細を取得
       const review = await this.reviewService.getReviewById(reviewId);
 
       if (!review) {
@@ -160,8 +166,18 @@ export class ReviewController {
         return;
       }
 
-      // 管理者でなく、かつ自分のレビューでない場合はアクセス拒否
-      if (!isAdmin && review.user_id !== userId) {
+      // アクセス権限チェック
+      // 管理者 OR 自分のレビュー OR 自分が所属するプロジェクトのレビュー
+      const hasAccess =
+        isAdmin ||
+        review.user_id === userId ||
+        (review.project_id &&
+          (await this.reviewService.isUserProjectMember(
+            review.project_id,
+            userId
+          )));
+
+      if (!hasAccess) {
         res.status(403).json({
           success: false,
           message: "このレビューにアクセスする権限がありません",
@@ -174,9 +190,10 @@ export class ReviewController {
         data: review,
       });
     } catch (error) {
+      console.error("レビュー詳細取得エラー:", error);
       res.status(500).json({
         success: false,
-        message: "レビュー取得中にエラーが発生しました",
+        message: "レビュー詳細の取得中にエラーが発生しました",
       });
     }
   };

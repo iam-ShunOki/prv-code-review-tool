@@ -1,9 +1,11 @@
 // backend/src/services/ReviewService.ts
 import { AppDataSource } from "../index";
 import { Review, ReviewStatus } from "../models/Review";
+import { UserProject } from "../models/UserProject";
 
 export class ReviewService {
   private reviewRepository = AppDataSource.getRepository(Review);
+  private userProjectRepository = AppDataSource.getRepository(UserProject);
 
   /**
    * 新規レビュー作成
@@ -96,5 +98,59 @@ export class ReviewService {
         reviewData.project_id === null ? undefined : reviewData.project_id,
     });
     return this.getReviewById(id);
+  }
+
+  /**
+   * ユーザーがアクセス可能なレビュー一覧を取得する
+   * - 自分のレビュー
+   * - 自分が所属するプロジェクトのレビュー
+   */
+  async getUserAccessibleReviews(userId: number): Promise<any[]> {
+    // 1. 自分が所属するプロジェクトのIDを取得
+    const userProjects = await this.userProjectRepository
+      .createQueryBuilder("up")
+      .select("up.project_id")
+      .where("up.user_id = :userId", { userId })
+      .getMany();
+
+    const projectIds = userProjects.map(
+      (up: { project_id: any }) => up.project_id
+    );
+
+    // 2. 条件作成: 自分のレビュー OR 自分が所属するプロジェクトのレビュー
+    const queryBuilder = this.reviewRepository
+      .createQueryBuilder("review")
+      .leftJoinAndSelect("review.user", "user")
+      .where("review.user_id = :userId", { userId });
+
+    // プロジェクトに所属している場合、そのプロジェクトのレビューも取得
+    if (projectIds.length > 0) {
+      queryBuilder.orWhere("review.project_id IN (:...projectIds)", {
+        projectIds,
+      });
+    }
+
+    // 3. 取得して返す
+    const reviews = await queryBuilder
+      .orderBy("review.created_at", "DESC")
+      .getMany();
+
+    return reviews;
+  }
+
+  /**
+   * ユーザーが指定したプロジェクトのメンバーかどうかを確認
+   */
+  async isUserProjectMember(
+    projectId: number,
+    userId: number
+  ): Promise<boolean> {
+    const userProject = await this.userProjectRepository
+      .createQueryBuilder("up")
+      .where("up.project_id = :projectId", { projectId })
+      .andWhere("up.user_id = :userId", { userId })
+      .getOne();
+
+    return !!userProject;
   }
 }

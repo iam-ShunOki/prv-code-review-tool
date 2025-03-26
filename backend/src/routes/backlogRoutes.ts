@@ -1,4 +1,5 @@
 // backend/src/routes/backlogRoutes.ts
+
 import express from "express";
 import { BacklogController } from "../controllers/BacklogController";
 import { BacklogWebhookController } from "../controllers/BacklogWebhookController";
@@ -8,71 +9,66 @@ const router = express.Router();
 const backlogController = new BacklogController();
 const backlogWebhookController = new BacklogWebhookController();
 
-// 認証ミドルウェアを適用（Webhook以外）
-router.use("/status", authenticate);
-router.use("/projects", authenticate);
-router.use("/submit-changes", authenticate);
-router.use("/vectorize", authenticate);
-router.use("/search", authenticate);
-router.use("/send-feedback", authenticate);
-router.use("/webhook-info", authenticate); // 追加
+// Backlog接続ステータスチェック
+router.get("/status", authenticate, backlogController.checkConnectionStatus);
 
-// Backlog接続ステータスを確認
-router.get("/status", backlogController.checkConnectionStatus);
-
-// プロジェクト一覧を取得
-router.get("/projects", backlogController.getProjects);
-
-// リポジトリ一覧を取得
+// プロジェクト関連API
+router.get("/projects", authenticate, backlogController.getProjects);
 router.get(
   "/projects/:projectId/repositories",
   authenticate,
   backlogController.getRepositories
 );
 
-// コード変更をプルリクエストとして提出
+// リポジトリ関連API
+router.post(
+  "/repositories/vectorize",
+  authenticate,
+  backlogController.vectorizeRepository
+);
+router.post(
+  "/repositories/search",
+  authenticate,
+  backlogController.searchSimilarCode
+);
+
+// プルリクエスト関連API
 router.post(
   "/submit-changes",
   authenticate,
   backlogController.submitCodeChanges
 );
-
-// リポジトリをベクトル化
-router.post(
-  "/vectorize",
-  authenticate,
-  requireAdmin,
-  backlogController.vectorizeRepository
-);
-
-// 類似コードを検索
-router.post("/search", authenticate, backlogController.searchSimilarCode);
-
-// レビュー結果をBacklogに手動で送信
 router.post(
   "/send-feedback",
   authenticate,
-  requireAdmin,
   backlogController.sendFeedbackToBacklog
 );
 
-// Webhook情報を取得
+// Webhook関連
+router.post("/webhook", backlogWebhookController.handleWebhook);
 router.get(
-  "/webhook-info",
+  "/webhook/check",
   authenticate,
-  requireAdmin,
+  backlogWebhookController.checkExistingPullRequests
+);
+router.get(
+  "/webhook/info",
+  authenticate,
   backlogWebhookController.getWebhookInfo
 );
 
-// Backlogからのwebhook受け取りエンドポイント（認証不要）
-router.post("/webhook", backlogWebhookController.handleWebhook);
-
-// 既存のプルリクエストをチェック（管理者のみ）
-router.post(
-  "/check-pull-requests",
+// 新API追加: ブランチ一覧取得
+router.get(
+  "/projects/:projectId/repositories/:repoId/branches",
   authenticate,
-  requireAdmin,
-  backlogWebhookController.checkExistingPullRequests
+  backlogController.getBranches
+);
+
+// 新API追加: ファイルツリー取得
+router.get(
+  "/projects/:projectId/repositories/:repoId/tree",
+  authenticate,
+  backlogController.getFileTree
 );
 
 export default router;

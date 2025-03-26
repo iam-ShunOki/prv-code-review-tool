@@ -4,6 +4,7 @@ import { Project, ProjectStatus } from "../models/Project";
 import { UserProject, UserProjectRole } from "../models/UserProject";
 import { User } from "../models/User";
 import { Review } from "../models/Review";
+import { In, IsNull } from "typeorm";
 
 export class ProjectService {
   private projectRepository = AppDataSource.getRepository(Project);
@@ -58,6 +59,80 @@ export class ProjectService {
         created_at: "DESC",
       },
     });
+  }
+
+  /**
+   * ユーザーがプロジェクトのメンバーかどうかを確認
+   */
+  async isUserProjectMember(
+    projectId: number,
+    userId: number
+  ): Promise<boolean> {
+    const userProject = await this.userProjectRepository.findOne({
+      where: { project_id: projectId, user_id: userId },
+    });
+
+    return !!userProject;
+  }
+
+  /**
+   * プロジェクトのレビュー一覧を取得（参加メンバー全員のレビューを含む）
+   */
+  async getProjectReviewsWithDetails(projectId: number): Promise<any[]> {
+    // まず、プロジェクトのメンバーIDを取得
+    const projectMembers = await this.userProjectRepository.find({
+      where: { project_id: projectId },
+      select: ["user_id"],
+    });
+
+    const memberIds = projectMembers.map((member) => member.user_id);
+
+    // プロジェクトに直接関連付けられたレビューを取得
+    const directReviews = await this.reviewRepository.find({
+      where: { project_id: projectId },
+      relations: ["user", "submissions", "submissions.feedbacks"],
+      order: { created_at: "DESC" },
+    });
+
+    // プロジェクトメンバーによるレビュー（プロジェクトに直接関連付けられていないもの）を取得
+    const memberReviews = await this.reviewRepository.find({
+      where: {
+        user_id: In(memberIds),
+        project_id: IsNull(), // プロジェクトに関連付けられていないもの
+      },
+      relations: ["user", "submissions", "submissions.feedbacks"],
+      order: { created_at: "DESC" },
+    });
+
+    // 両方のレビューを結合して返す
+    const allReviews = [...directReviews, ...memberReviews];
+
+    // レビューごとに追加情報を計算
+    const enrichedReviews = allReviews.map((review) => {
+      const lastSubmission = review.submissions.sort(
+        (a, b) =>
+          new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      )[0];
+
+      const totalFeedbacks = lastSubmission
+        ? lastSubmission.feedbacks.length
+        : 0;
+      const resolvedFeedbacks = lastSubmission
+        ? lastSubmission.feedbacks.filter((f) => f.is_resolved).length
+        : 0;
+
+      return {
+        ...review,
+        progress: totalFeedbacks
+          ? Math.round((resolvedFeedbacks / totalFeedbacks) * 100)
+          : 0,
+        submission_count: review.submissions.length,
+        // 不要なネストを除去
+        submissions: undefined,
+      };
+    });
+
+    return enrichedReviews;
   }
 
   /**

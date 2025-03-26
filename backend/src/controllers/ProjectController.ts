@@ -114,6 +114,64 @@ export class ProjectController {
   };
 
   /**
+   * プロジェクトに関連するレビュー一覧を取得
+   */
+  getProjectReviews = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const projectId = parseInt(req.params.id);
+      const userId = req.user?.id;
+      const isAdmin = req.user?.role === "admin";
+
+      if (!userId) {
+        res.status(401).json({
+          success: false,
+          message: "認証されていません",
+        });
+        return;
+      }
+
+      // プロジェクトの存在確認とアクセス権チェック
+      const project = await this.projectService.getProjectById(projectId);
+      if (!project) {
+        res.status(404).json({
+          success: false,
+          message: "プロジェクトが見つかりません",
+        });
+        return;
+      }
+
+      // 管理者でない場合は、そのプロジェクトのメンバーかどうかを確認
+      if (!isAdmin) {
+        const isMember = await this.projectService.isUserProjectMember(
+          projectId,
+          userId
+        );
+        if (!isMember) {
+          res.status(403).json({
+            success: false,
+            message: "このプロジェクトにアクセスする権限がありません",
+          });
+          return;
+        }
+      }
+
+      // プロジェクトに関連するレビュー一覧を取得
+      const reviews = await this.projectService.getProjectReviews(projectId);
+
+      res.status(200).json({
+        success: true,
+        data: reviews,
+      });
+    } catch (error) {
+      console.error("プロジェクトレビュー取得エラー:", error);
+      res.status(500).json({
+        success: false,
+        message: "プロジェクトのレビュー取得中にエラーが発生しました",
+      });
+    }
+  };
+
+  /**
    * 特定のプロジェクトを取得
    */
   getProjectById = async (req: Request, res: Response): Promise<void> => {

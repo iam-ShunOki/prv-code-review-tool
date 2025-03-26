@@ -1,3 +1,4 @@
+// frontend/src/app/dashboard/projects/new/page.tsx
 "use client";
 
 import { useState } from "react";
@@ -34,7 +35,7 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/components/ui/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
-import { Calendar as CalendarIcon, ArrowLeft } from "lucide-react";
+import { Calendar as CalendarIcon, ArrowLeft, Users } from "lucide-react";
 import { format } from "date-fns";
 import { ja } from "date-fns/locale";
 import { Calendar } from "@/components/ui/calendar";
@@ -44,6 +45,11 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+
+// コンポーネントをインポート
+import { RepositorySelector } from "@/components/backlog/RepositorySelector";
+import { MemberSelector } from "@/components/members/MemberSelector";
 
 // フォームのバリデーションスキーマ
 const projectSchema = z.object({
@@ -61,16 +67,35 @@ const projectSchema = z.object({
   start_date: z.date().optional().nullable(),
   end_date: z.date().optional().nullable(),
   backlog_project_key: z.string().optional(),
-  backlog_repository_names: z.string().optional(),
 });
 
 type ProjectFormValues = z.infer<typeof projectSchema>;
+
+// メンバーの役割定義
+interface SelectedMember {
+  id: number;
+  name: string;
+  role: string;
+}
+
+// プロジェクトメンバーの役割オプション
+const projectRoles = [
+  { value: "leader", label: "リーダー" },
+  { value: "member", label: "メンバー" },
+  { value: "reviewer", label: "レビュアー" },
+  { value: "observer", label: "オブザーバー" },
+];
 
 export default function NewProjectPage() {
   const router = useRouter();
   const { toast } = useToast();
   const { token, user } = useAuth();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [selectedRepositories, setSelectedRepositories] = useState<string[]>(
+    []
+  );
+  const [selectedMembers, setSelectedMembers] = useState<SelectedMember[]>([]);
+  const [activeTab, setActiveTab] = useState("basic");
 
   // フォームの初期化
   const form = useForm<ProjectFormValues>({
@@ -83,9 +108,13 @@ export default function NewProjectPage() {
       start_date: null,
       end_date: null,
       backlog_project_key: "",
-      backlog_repository_names: "",
     },
   });
+
+  // Backlogプロジェクトキー変更
+  const handleBacklogProjectKeyChange = (projectKey: string) => {
+    form.setValue("backlog_project_key", projectKey);
+  };
 
   // 管理者権限チェック
   if (user?.role !== "admin") {
@@ -111,6 +140,7 @@ export default function NewProjectPage() {
     setIsSubmitting(true);
 
     try {
+      // プロジェクト作成リクエスト
       const response = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL}/api/projects`,
         {
@@ -127,6 +157,10 @@ export default function NewProjectPage() {
             end_date: data.end_date
               ? format(data.end_date, "yyyy-MM-dd")
               : null,
+            backlog_repository_names:
+              selectedRepositories.length > 0
+                ? selectedRepositories.join(",")
+                : null,
           }),
         }
       );
@@ -138,14 +172,40 @@ export default function NewProjectPage() {
         );
       }
 
+      const responseData = await response.json();
+      const projectId = responseData.data.id;
+
+      // メンバーがいる場合は追加
+      if (selectedMembers.length > 0) {
+        // メンバー追加用のリクエスト
+        const memberPromises = selectedMembers.map((member) =>
+          fetch(
+            `${process.env.NEXT_PUBLIC_API_URL}/api/projects/${projectId}/members`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify({
+                userId: member.id,
+                role: member.role,
+              }),
+            }
+          )
+        );
+
+        // すべてのメンバー追加リクエストを実行
+        await Promise.all(memberPromises);
+      }
+
       toast({
         title: "プロジェクト作成完了",
         description: "プロジェクトが正常に作成されました",
       });
 
       // 作成したプロジェクトの詳細ページに遷移
-      const responseData = await response.json();
-      router.push(`/dashboard/projects/${responseData.data.id}`);
+      router.push(`/dashboard/projects/${projectId}`);
     } catch (error) {
       console.error("プロジェクト作成エラー:", error);
       toast({
@@ -175,247 +235,337 @@ export default function NewProjectPage() {
         <h1 className="text-2xl font-bold">新規プロジェクト作成</h1>
       </div>
 
-      <Form {...form}>
-        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
-          <Card>
-            <CardHeader>
-              <CardTitle>基本情報</CardTitle>
-              <CardDescription>
-                プロジェクトの基本情報を入力してください
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <FormField
-                  control={form.control}
-                  name="name"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>
-                        プロジェクト名<span className="text-red-500">*</span>
-                      </FormLabel>
-                      <FormControl>
-                        <Input placeholder="プロジェクト名" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <TabsList className="grid w-full grid-cols-3">
+          <TabsTrigger value="basic">基本情報</TabsTrigger>
+          <TabsTrigger value="backlog">Backlog連携</TabsTrigger>
+          <TabsTrigger value="members" className="flex items-center">
+            <Users className="h-4 w-4 mr-2" /> メンバー
+            {selectedMembers.length > 0 && (
+              <span className="ml-1 text-xs bg-primary text-primary-foreground rounded-full px-2 py-0.5">
+                {selectedMembers.length}
+              </span>
+            )}
+          </TabsTrigger>
+        </TabsList>
 
-                <FormField
-                  control={form.control}
-                  name="code"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>
-                        プロジェクトコード
-                        <span className="text-red-500">*</span>
-                      </FormLabel>
-                      <FormControl>
-                        <Input placeholder="project-code" {...field} />
-                      </FormControl>
-                      <FormDescription>
-                        英数字、ハイフン、アンダースコアのみ使用可能
-                      </FormDescription>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              </div>
-
-              <FormField
-                control={form.control}
-                name="description"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>説明</FormLabel>
-                    <FormControl>
-                      <Textarea
-                        placeholder="プロジェクトの説明"
-                        className="min-h-32"
-                        {...field}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={form.control}
-                name="status"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>
-                      ステータス<span className="text-red-500">*</span>
-                    </FormLabel>
-                    <Select
-                      onValueChange={field.onChange}
-                      defaultValue={field.value}
-                    >
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder="ステータスを選択" />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        <SelectItem value="planning">計画中</SelectItem>
-                        <SelectItem value="active">進行中</SelectItem>
-                        <SelectItem value="completed">完了</SelectItem>
-                        <SelectItem value="archived">アーカイブ</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <FormField
-                  control={form.control}
-                  name="start_date"
-                  render={({ field }) => (
-                    <FormItem className="flex flex-col">
-                      <FormLabel>開始日</FormLabel>
-                      <Popover>
-                        <PopoverTrigger asChild>
+        <Form {...form}>
+          <form
+            onSubmit={form.handleSubmit(onSubmit)}
+            className="space-y-8 mt-6"
+          >
+            <TabsContent value="basic">
+              <Card>
+                <CardHeader>
+                  <CardTitle>基本情報</CardTitle>
+                  <CardDescription>
+                    プロジェクトの基本情報を入力してください
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <FormField
+                      control={form.control}
+                      name="name"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>
+                            プロジェクト名
+                            <span className="text-red-500">*</span>
+                          </FormLabel>
                           <FormControl>
-                            <Button
-                              variant={"outline"}
-                              className={cn(
-                                "pl-3 text-left font-normal",
-                                !field.value && "text-muted-foreground"
-                              )}
-                            >
-                              {field.value ? (
-                                format(field.value, "yyyy/MM/dd", {
-                                  locale: ja,
-                                })
-                              ) : (
-                                <span>開始日を選択</span>
-                              )}
-                              <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
-                            </Button>
+                            <Input placeholder="プロジェクト名" {...field} />
                           </FormControl>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
-                          <Calendar
-                            mode="single"
-                            selected={field.value || undefined}
-                            onSelect={field.onChange}
-                            disabled={(date) => date < new Date("1900-01-01")}
-                            initialFocus
-                          />
-                        </PopoverContent>
-                      </Popover>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
 
-                <FormField
-                  control={form.control}
-                  name="end_date"
-                  render={({ field }) => (
-                    <FormItem className="flex flex-col">
-                      <FormLabel>終了日</FormLabel>
-                      <Popover>
-                        <PopoverTrigger asChild>
+                    <FormField
+                      control={form.control}
+                      name="code"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>
+                            プロジェクトコード
+                            <span className="text-red-500">*</span>
+                          </FormLabel>
                           <FormControl>
-                            <Button
-                              variant={"outline"}
-                              className={cn(
-                                "pl-3 text-left font-normal",
-                                !field.value && "text-muted-foreground"
-                              )}
-                            >
-                              {field.value ? (
-                                format(field.value, "yyyy/MM/dd", {
-                                  locale: ja,
-                                })
-                              ) : (
-                                <span>終了日を選択</span>
-                              )}
-                              <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
-                            </Button>
+                            <Input placeholder="project-code" {...field} />
                           </FormControl>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
-                          <Calendar
-                            mode="single"
-                            selected={field.value || undefined}
-                            onSelect={field.onChange}
-                            disabled={(date) => date < new Date("1900-01-01")}
-                            initialFocus
+                          <FormDescription>
+                            英数字、ハイフン、アンダースコアのみ使用可能
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+
+                  <FormField
+                    control={form.control}
+                    name="description"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>説明</FormLabel>
+                        <FormControl>
+                          <Textarea
+                            placeholder="プロジェクトの説明"
+                            className="min-h-32"
+                            {...field}
                           />
-                        </PopoverContent>
-                      </Popover>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              </div>
-            </CardContent>
-          </Card>
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Backlog連携設定</CardTitle>
-              <CardDescription>
-                Backlogとの連携情報（オプション）
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <FormField
-                control={form.control}
-                name="backlog_project_key"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Backlogプロジェクトキー</FormLabel>
-                    <FormControl>
-                      <Input placeholder="PROJECT_KEY" {...field} />
-                    </FormControl>
-                    <FormDescription>
-                      BacklogのプロジェクトキーはURLやプロジェクト設定から確認できます
-                    </FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
+                  <FormField
+                    control={form.control}
+                    name="status"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>
+                          ステータス<span className="text-red-500">*</span>
+                        </FormLabel>
+                        <Select
+                          onValueChange={field.onChange}
+                          defaultValue={field.value}
+                        >
+                          <FormControl>
+                            <SelectTrigger>
+                              <SelectValue placeholder="ステータスを選択" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            <SelectItem value="planning">計画中</SelectItem>
+                            <SelectItem value="active">進行中</SelectItem>
+                            <SelectItem value="completed">完了</SelectItem>
+                            <SelectItem value="archived">アーカイブ</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
 
-              <FormField
-                control={form.control}
-                name="backlog_repository_names"
-                render={({ field }) => (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <FormField
+                      control={form.control}
+                      name="start_date"
+                      render={({ field }) => (
+                        <FormItem className="flex flex-col">
+                          <FormLabel>開始日</FormLabel>
+                          <Popover>
+                            <PopoverTrigger asChild>
+                              <FormControl>
+                                <Button
+                                  variant={"outline"}
+                                  className={cn(
+                                    "pl-3 text-left font-normal",
+                                    !field.value && "text-muted-foreground"
+                                  )}
+                                >
+                                  {field.value ? (
+                                    format(field.value, "yyyy/MM/dd", {
+                                      locale: ja,
+                                    })
+                                  ) : (
+                                    <span>開始日を選択</span>
+                                  )}
+                                  <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
+                                </Button>
+                              </FormControl>
+                            </PopoverTrigger>
+                            <PopoverContent
+                              className="w-auto p-0"
+                              align="start"
+                            >
+                              <Calendar
+                                mode="single"
+                                selected={field.value || undefined}
+                                onSelect={field.onChange}
+                                disabled={(date) =>
+                                  date < new Date("1900-01-01")
+                                }
+                                initialFocus
+                              />
+                            </PopoverContent>
+                          </Popover>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name="end_date"
+                      render={({ field }) => (
+                        <FormItem className="flex flex-col">
+                          <FormLabel>終了日</FormLabel>
+                          <Popover>
+                            <PopoverTrigger asChild>
+                              <FormControl>
+                                <Button
+                                  variant={"outline"}
+                                  className={cn(
+                                    "pl-3 text-left font-normal",
+                                    !field.value && "text-muted-foreground"
+                                  )}
+                                >
+                                  {field.value ? (
+                                    format(field.value, "yyyy/MM/dd", {
+                                      locale: ja,
+                                    })
+                                  ) : (
+                                    <span>終了日を選択</span>
+                                  )}
+                                  <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
+                                </Button>
+                              </FormControl>
+                            </PopoverTrigger>
+                            <PopoverContent
+                              className="w-auto p-0"
+                              align="start"
+                            >
+                              <Calendar
+                                mode="single"
+                                selected={field.value || undefined}
+                                onSelect={field.onChange}
+                                disabled={(date) =>
+                                  date < new Date("1900-01-01")
+                                }
+                                initialFocus
+                              />
+                            </PopoverContent>
+                          </Popover>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+                </CardContent>
+                <CardFooter className="flex justify-between">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => router.push("/dashboard/projects")}
+                  >
+                    キャンセル
+                  </Button>
+                  <Button type="button" onClick={() => setActiveTab("backlog")}>
+                    次へ
+                  </Button>
+                </CardFooter>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="backlog">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Backlog連携設定</CardTitle>
+                  <CardDescription>
+                    Backlogとの連携情報（オプション）
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  <FormField
+                    control={form.control}
+                    name="backlog_project_key"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Backlogプロジェクト</FormLabel>
+                        <FormControl>
+                          <Input
+                            placeholder="PROJECT_KEY"
+                            {...field}
+                            disabled={true} // リポジトリセレクターから自動設定
+                          />
+                        </FormControl>
+                        <FormDescription>
+                          リポジトリの選択時に自動的に設定されます
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
                   <FormItem>
                     <FormLabel>関連リポジトリ</FormLabel>
                     <FormControl>
-                      <Input placeholder="repo1, repo2, repo3" {...field} />
+                      <RepositorySelector
+                        token={token || ""}
+                        selectedRepositories={selectedRepositories}
+                        onRepositoriesChange={setSelectedRepositories}
+                        backlogProjectKey={form.watch("backlog_project_key")}
+                        onBacklogProjectKeyChange={
+                          handleBacklogProjectKeyChange
+                        }
+                      />
                     </FormControl>
                     <FormDescription>
-                      複数のリポジトリはカンマ区切りで入力してください
+                      プロジェクトに関連付けるリポジトリを選択してください
                     </FormDescription>
-                    <FormMessage />
                   </FormItem>
-                )}
-              />
-            </CardContent>
+                </CardContent>
+                <CardFooter className="flex justify-between">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setActiveTab("basic")}
+                  >
+                    戻る
+                  </Button>
+                  <Button type="button" onClick={() => setActiveTab("members")}>
+                    次へ
+                  </Button>
+                </CardFooter>
+              </Card>
+            </TabsContent>
 
-            <CardFooter className="flex justify-between">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => router.push("/dashboard/projects")}
-              >
-                キャンセル
-              </Button>
-              <Button type="submit" disabled={isSubmitting}>
-                {isSubmitting ? "作成中..." : "プロジェクトを作成"}
-              </Button>
-            </CardFooter>
-          </Card>
-        </form>
-      </Form>
+            <TabsContent value="members">
+              <Card>
+                <CardHeader>
+                  <CardTitle>メンバー設定</CardTitle>
+                  <CardDescription>
+                    プロジェクトに参加するメンバーを選択してください（オプション）
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  <FormItem>
+                    <FormLabel>プロジェクトメンバー</FormLabel>
+                    <FormControl>
+                      <MemberSelector
+                        token={token || ""}
+                        selectedMembers={selectedMembers}
+                        onMembersChange={setSelectedMembers}
+                        availableRoles={projectRoles}
+                        defaultRole="member"
+                        showFilters={true}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      プロジェクトに参加するメンバーを選択し、役割を設定してください
+                    </FormDescription>
+                  </FormItem>
+                </CardContent>
+                <CardFooter className="flex justify-between">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setActiveTab("backlog")}
+                  >
+                    戻る
+                  </Button>
+                  <Button type="submit" disabled={isSubmitting}>
+                    {isSubmitting ? "作成中..." : "プロジェクトを作成"}
+                  </Button>
+                </CardFooter>
+              </Card>
+            </TabsContent>
+          </form>
+        </Form>
+      </Tabs>
     </div>
   );
 }
