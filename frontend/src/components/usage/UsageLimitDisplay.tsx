@@ -136,7 +136,7 @@ export function UsageLimitDisplay() {
 
   return (
     <Card>
-      <CardHeader className="pb-2 flex flex-row items-center justify-between">
+      <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle className="text-lg">本日の利用状況</CardTitle>
       </CardHeader>
       <CardContent>

@@ -21,7 +21,7 @@ export class CreateEvaluationCriteria1625000001200
               generationStrategy: "increment",
             },
             {
-              name: "`key`", // バッククォートでエスケープ
+              name: "criteria_key", // 'key'を'criteria_key'に変更
               type: "varchar",
               length: "50",
               isUnique: true,
@@ -76,7 +76,7 @@ export class CreateEvaluationCriteria1625000001200
           indices: [
             {
               name: "idx_evaluation_criteria_key",
-              columnNames: ["`key`"], // バッククォートでエスケープ
+              columnNames: ["criteria_key"], // ここも'criteria_key'に変更
               isUnique: true,
             },
           ],
@@ -84,9 +84,9 @@ export class CreateEvaluationCriteria1625000001200
         true
       );
 
-      // 初期データの挿入
+      // 初期データの挿入 - criteria_keyに合わせて修正
       await queryRunner.query(`
-        INSERT INTO evaluation_criteria (\`key\`, name, description, min_score, max_score, weight, is_active, display_order)
+        INSERT INTO evaluation_criteria (criteria_key, name, description, min_score, max_score, weight, is_active, display_order)
         VALUES 
           ('code_quality', 'コード品質', 'コードの品質、堅牢性、エラー処理など', 0, 10, 1.0, true, 1),
           ('readability', '可読性', 'コードの読みやすさ、命名規則、コメントなど', 0, 10, 1.0, true, 2),

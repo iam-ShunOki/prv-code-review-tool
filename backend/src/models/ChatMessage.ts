@@ -6,6 +6,7 @@ import {
   CreateDateColumn,
   ManyToOne,
   JoinColumn,
+  Index,
 } from "typeorm";
 import { User } from "./User";
 import { Review } from "./Review";
@@ -26,7 +27,7 @@ export class ChatMessage {
   @Column({ nullable: true })
   review_id: number;
 
-  @Column("text")
+  @Column({ type: "text" })
   content: string;
 
   @Column({
@@ -38,6 +39,10 @@ export class ChatMessage {
 
   @CreateDateColumn()
   created_at: Date;
+
+  @Column({ nullable: true, length: 100 })
+  @Index()
+  session_id: string;
 
   @ManyToOne(() => User)
   @JoinColumn({ name: "user_id" })

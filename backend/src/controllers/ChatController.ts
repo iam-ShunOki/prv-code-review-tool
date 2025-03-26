@@ -32,18 +32,21 @@ export class ChatController {
         return;
       }
 
-      // クエリパラメータからレビューIDを取得（オプション）
+      // クエリパラメータから取得
       const reviewId = req.query.reviewId
         ? parseInt(req.query.reviewId as string)
+        : undefined;
+      const sessionId = req.query.sessionId
+        ? (req.query.sessionId as string)
         : undefined;
       const limit = req.query.limit ? parseInt(req.query.limit as string) : 100;
 
       // チャット履歴を取得
-      const chatHistory = await this.chatService.getChatHistory(
-        userId,
+      const chatHistory = await this.chatService.getChatHistory(userId, {
         reviewId,
-        limit
-      );
+        sessionId,
+        limit,
+      });
 
       res.status(200).json({
         success: true,
@@ -61,6 +64,39 @@ export class ChatController {
   };
 
   /**
+   * チャットセッション一覧の取得
+   */
+  getChatSessions = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = req.user?.id;
+
+      if (!userId) {
+        res.status(401).json({
+          success: false,
+          message: "認証されていません",
+        });
+        return;
+      }
+
+      // ユーザーのチャットセッション一覧を取得
+      const sessions = await this.chatService.getUserChatSessions(userId);
+
+      res.status(200).json({
+        success: true,
+        data: sessions,
+      });
+    } catch (error) {
+      console.error("チャットセッション取得エラー:", error);
+
+      res.status(500).json({
+        success: false,
+        message: "チャットセッション一覧の取得中にエラーが発生しました",
+        error: error instanceof Error ? error.message : "不明なエラー",
+      });
+    }
+  };
+
+  /**
    * チャットメッセージの送信（AI応答を含む）
    */
   sendMessage = async (req: Request, res: Response): Promise<void> => {
@@ -69,6 +105,7 @@ export class ChatController {
       const messageSchema = z.object({
         message: z.string().min(1, "メッセージは必須です"),
         reviewId: z.number().optional(),
+        sessionId: z.string().optional(),
         context: z
           .object({
             reviewTitle: z.string().optional(),
@@ -112,11 +149,17 @@ export class ChatController {
         return;
       }
 
+      // セッションID生成または取得
+      const sessionId =
+        validatedData.sessionId ||
+        `session-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+
       // ユーザーメッセージを保存
       await this.chatService.saveMessage(
         userId,
         validatedData.message,
         ChatSender.USER,
+        sessionId,
         validatedData.reviewId
       );
 
@@ -125,7 +168,10 @@ export class ChatController {
         userId,
         "ai_chat",
         validatedData.reviewId?.toString(),
-        { messageLength: validatedData.message.length }
+        {
+          messageLength: validatedData.message.length,
+          sessionId: sessionId,
+        }
       );
 
       // AIアシスタントからのレスポンスを取得
@@ -140,6 +186,7 @@ export class ChatController {
         userId,
         aiResponse,
         ChatSender.AI,
+        sessionId,
         validatedData.reviewId
       );
 
@@ -148,6 +195,7 @@ export class ChatController {
         success: true,
         data: {
           message: aiResponse,
+          sessionId: sessionId,
         },
       });
     } catch (error) {

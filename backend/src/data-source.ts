@@ -33,6 +33,7 @@ import { RemoveLineNumber1625000001000 } from "./migrations/1625000001000-Remove
 import { AddCodeSnippetToFeedback1625000001100 } from "./migrations/1625000001100-AddCodeSnippetToFeedback";
 import { CreateEvaluationCriteria1625000001200 } from "./migrations/1625000001200-CreateEvaluationCriteria";
 import { CreateChatMessagesTable1625000001300 } from "./migrations/1625000001300-CreateChatMessagesTable";
+import { AddSessionIdToChatMessages1625000001400 } from "./migrations/1625000001400-AddSessionIdToChatMessages";
 // 環境変数の読み込み
 dotenv.config();
 
@@ -80,6 +81,7 @@ export const AppDataSource = new DataSource({
     AddCodeSnippetToFeedback1625000001100,
     CreateEvaluationCriteria1625000001200,
     CreateChatMessagesTable1625000001300,
+    AddSessionIdToChatMessages1625000001400,
   ],
   subscribers: [],
 

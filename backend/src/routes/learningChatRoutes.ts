@@ -12,6 +12,12 @@ router.use(authenticate);
 // 学習チャット履歴の取得
 router.get("/history", learningChatController.getChatHistory);
 
+// 学習チャットセッション一覧の取得
+router.get("/sessions", learningChatController.getChatSessions);
+
+// 特定セッションのメッセージを取得（sessionIdパラメータ必須）
+router.get("/messages", learningChatController.getSessionMessages);
+
 // 学習チャットメッセージの送信
 router.post("/message", learningChatController.sendMessage);
 

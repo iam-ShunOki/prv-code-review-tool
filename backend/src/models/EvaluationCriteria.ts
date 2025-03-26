@@ -12,8 +12,8 @@ export class EvaluationCriteria {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column({ unique: true })
-  key: string;
+  @Column({ unique: true, name: "criteria_key" }) // keyからcriteria_keyに変更
+  key: string; // プロパティ名はkeyのままでもOK（エンティティ内でのみの使用なので）
 
   @Column()
   name: string;

@@ -32,15 +32,17 @@ export class LearningChatController {
         return;
       }
 
-      // クエリパラメータからconversationIdを取得（オプション）
+      // クエリパラメータからsessionIdを取得（オプション）
+      const sessionId = req.query.sessionId
+        ? (req.query.sessionId as string)
+        : undefined;
       const limit = req.query.limit ? parseInt(req.query.limit as string) : 100;
 
-      // チャット履歴を取得（プログラミング学習用チャットはreviewIdを指定しない）
-      const chatHistory = await this.chatService.getChatHistory(
-        userId,
-        undefined, // reviewIdは未指定
-        limit
-      );
+      // チャット履歴を取得
+      const chatHistory = await this.chatService.getChatHistory(userId, {
+        sessionId,
+        limit,
+      });
 
       res.status(200).json({
         success: true,
@@ -58,6 +60,84 @@ export class LearningChatController {
   };
 
   /**
+   * チャットセッション一覧の取得
+   */
+  getChatSessions = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = req.user?.id;
+
+      if (!userId) {
+        res.status(401).json({
+          success: false,
+          message: "認証されていません",
+        });
+        return;
+      }
+
+      // ユーザーのチャットセッション一覧を取得
+      const sessions = await this.chatService.getUserChatSessions(userId);
+
+      res.status(200).json({
+        success: true,
+        data: sessions,
+      });
+    } catch (error) {
+      console.error("チャットセッション取得エラー:", error);
+
+      res.status(500).json({
+        success: false,
+        message: "チャットセッション一覧の取得中にエラーが発生しました",
+        error: error instanceof Error ? error.message : "不明なエラー",
+      });
+    }
+  };
+
+  /**
+   * 特定セッションのメッセージを取得
+   */
+  getSessionMessages = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const userId = req.user?.id;
+
+      if (!userId) {
+        res.status(401).json({
+          success: false,
+          message: "認証されていません",
+        });
+        return;
+      }
+
+      // セッションIDの取得（必須）
+      const sessionId = req.query.sessionId as string;
+      if (!sessionId) {
+        res.status(400).json({
+          success: false,
+          message: "セッションIDは必須です",
+        });
+        return;
+      }
+
+      // セッションのメッセージを取得
+      const messages = await this.chatService.getChatHistory(userId, {
+        sessionId,
+      });
+
+      res.status(200).json({
+        success: true,
+        data: messages,
+      });
+    } catch (error) {
+      console.error("セッションメッセージ取得エラー:", error);
+
+      res.status(500).json({
+        success: false,
+        message: "セッションメッセージの取得中にエラーが発生しました",
+        error: error instanceof Error ? error.message : "不明なエラー",
+      });
+    }
+  };
+
+  /**
    * 学習チャットメッセージの送信
    */
   sendMessage = async (req: Request, res: Response): Promise<void> => {
@@ -68,6 +148,7 @@ export class LearningChatController {
         chatMode: z
           .enum(["general", "code-review", "debugging"])
           .default("general"),
+        sessionId: z.string().optional(),
         context: z
           .object({
             isLearningMode: z.boolean().default(true),
@@ -102,17 +183,24 @@ export class LearningChatController {
         return;
       }
 
+      // セッションID生成または取得
+      const sessionId =
+        validatedData.sessionId ||
+        `session-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+
       // ユーザーメッセージを保存
       await this.chatService.saveMessage(
         userId,
         validatedData.message,
-        ChatSender.USER
+        ChatSender.USER,
+        sessionId
       );
 
       // 利用をログに記録
       await this.usageLimitService.logUsage(userId, "ai_chat", undefined, {
         messageLength: validatedData.message.length,
         chatMode: validatedData.chatMode,
+        sessionId: sessionId,
       });
 
       // 学習AIサービスから教育的な応答を取得
@@ -122,13 +210,19 @@ export class LearningChatController {
       );
 
       // AIの応答を保存
-      await this.chatService.saveMessage(userId, aiResponse, ChatSender.AI);
+      await this.chatService.saveMessage(
+        userId,
+        aiResponse,
+        ChatSender.AI,
+        sessionId
+      );
 
       // レスポンスを返す
       res.status(200).json({
         success: true,
         data: {
           message: aiResponse,
+          sessionId: sessionId,
         },
       });
     } catch (error) {
