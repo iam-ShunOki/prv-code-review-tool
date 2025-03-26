@@ -59,6 +59,10 @@ interface Review {
     name: string;
     code: string;
   };
+  group?: {
+    id: number;
+    name: string;
+  };
 }
 
 // プロジェクトの型定義（追加）
@@ -68,17 +72,26 @@ interface Project {
   code: string;
 }
 
+interface Group {
+  id: number;
+  name: string;
+  description: string;
+  is_active: boolean;
+}
+
 export default function ReviewsPage() {
   const searchParams = useSearchParams();
   const [reviews, setReviews] = useState<Review[]>([]);
   const [filteredReviews, setFilteredReviews] = useState<Review[]>([]); // 追加
   const [projects, setProjects] = useState<Project[]>([]); // 追加
+  const [groups, setGroups] = useState<Group[]>([]); // 追加
   const [isLoading, setIsLoading] = useState(true);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [searchQuery, setSearchQuery] = useState(""); // 追加
   const [selectedProject, setSelectedProject] = useState<string>(""); // 追加
   const [selectedStatus, setSelectedStatus] = useState<string>(""); // 追加
+  const [selectedGroup, setSelectedGroup] = useState<string>(""); // 追加
   const itemsPerPage = 4; // 1ページあたりの表示数
   const { user, token } = useAuth();
   const { toast } = useToast();
@@ -92,7 +105,7 @@ export default function ReviewsPage() {
     }
   }, [searchParams]);
 
-  // プロジェクト一覧の取得（追加）
+  // プロジェクト一覧, グループ一覧の取得（追加）
   useEffect(() => {
     const fetchProjects = async () => {
       if (!token) return;
@@ -121,6 +134,34 @@ export default function ReviewsPage() {
     };
 
     fetchProjects();
+
+    const fetchGroups = async () => {
+      if (!token) return;
+
+      try {
+        const endpoint =
+          user?.role === "admin"
+            ? `${process.env.NEXT_PUBLIC_API_URL}/api/groups/`
+            : `${process.env.NEXT_PUBLIC_API_URL}/api/groups/my`;
+
+        const response = await fetch(endpoint, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        if (!response.ok) {
+          throw new Error("グループ一覧の取得に失敗しました");
+        }
+
+        const data = await response.json();
+        setGroups(data.data || []);
+      } catch (error) {
+        console.error("グループ取得エラー:", error);
+      }
+    };
+
+    fetchGroups();
   }, [token, user?.role]);
 
   // レビュー一覧を取得
@@ -191,6 +232,13 @@ export default function ReviewsPage() {
     // ステータスでフィルタリング
     if (status) {
       filtered = filtered.filter((review) => review.status === status);
+    }
+
+    // グループでフィルタリング
+    if (selectedGroup) {
+      filtered = filtered.filter(
+        (review) => review.group && review.group.id === parseInt(selectedGroup)
+      );
     }
 
     setFilteredReviews(filtered);
@@ -394,6 +442,24 @@ export default function ReviewsPage() {
                   {projects.map((project) => (
                     <SelectItem key={project.id} value={String(project.id)}>
                       {project.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="w-full md:w-1/4">
+              <Select value={selectedGroup} onValueChange={setSelectedGroup}>
+                <SelectTrigger className="w-full">
+                  <div className="flex items-center">
+                    <Folder className="mr-2 h-4 w-4" />
+                    <SelectValue placeholder="グループで絞り込み" />
+                  </div>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">すべてのグループ</SelectItem>
+                  {groups.map((group) => (
+                    <SelectItem key={group.id} value={String(group.id)}>
+                      {group.name}
                     </SelectItem>
                   ))}
                 </SelectContent>

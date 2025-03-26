@@ -83,7 +83,63 @@ export default function ProjectsPage() {
         }
 
         const data = await response.json();
-        setProjects(data.data || []);
+        const projectsData = data.data || [];
+
+        // 各プロジェクトのメンバー数とレビュー数を取得して追加
+        const enhancedProjects = await Promise.all(
+          projectsData.map(async (project: Project) => {
+            const projectWithDetails = { ...project };
+
+            try {
+              // メンバー情報を取得
+              const membersResponse = await fetch(
+                `${process.env.NEXT_PUBLIC_API_URL}/api/projects/${project.id}/members`,
+                {
+                  headers: {
+                    Authorization: `Bearer ${token}`,
+                  },
+                }
+              );
+
+              if (membersResponse.ok) {
+                const membersData = await membersResponse.json();
+                projectWithDetails.userProjects = membersData.data || [];
+              } else {
+                projectWithDetails.userProjects = [];
+              }
+
+              // レビュー情報を取得
+              const reviewsResponse = await fetch(
+                `${process.env.NEXT_PUBLIC_API_URL}/api/projects/${project.id}/reviews`,
+                {
+                  headers: {
+                    Authorization: `Bearer ${token}`,
+                  },
+                }
+              );
+
+              if (reviewsResponse.ok) {
+                const reviewsData = await reviewsResponse.json();
+                projectWithDetails.reviews = reviewsData.data || [];
+              } else {
+                projectWithDetails.reviews = [];
+              }
+            } catch (error) {
+              console.error(
+                `プロジェクト ${project.id} の詳細取得エラー:`,
+                error
+              );
+              // エラーが発生した場合のデフォルト値
+              if (!projectWithDetails.userProjects)
+                projectWithDetails.userProjects = [];
+              if (!projectWithDetails.reviews) projectWithDetails.reviews = [];
+            }
+
+            return projectWithDetails;
+          })
+        );
+
+        setProjects(enhancedProjects);
       } catch (error) {
         console.error("プロジェクト取得エラー:", error);
         toast({

@@ -39,6 +39,7 @@ import {
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import remarkGfm from "remark-gfm";
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useLearningChat, ChatMode } from "@/hooks/useLearningChat";
 
@@ -570,55 +571,50 @@ const ChatPage = () => {
                             {message.content}
                           </div>
                         ) : (
-                          <div className="prose dark:prose-invert max-w-none break-words">
+                          <div className="break-words">
                             <ReactMarkdown
+                              remarkPlugins={[remarkGfm]}
                               components={{
-                                code(
-                                  props: React.ComponentPropsWithoutRef<"code"> & {
-                                    inline?: boolean;
-                                    node?: any;
-                                  }
-                                ) {
-                                  const {
-                                    inline,
-                                    className,
-                                    children,
-                                    ...rest
-                                  } = props;
-                                  const match = /language-(\w+)/.exec(
-                                    className || ""
-                                  );
-                                  return !inline && match ? (
-                                    renderCodeBlock({
-                                      language: match[1],
-                                      value: String(children).replace(
-                                        /\n$/,
-                                        ""
-                                      ),
-                                    })
-                                  ) : (
-                                    <code
-                                      className="bg-zinc-800 text-zinc-200 px-1 py-0.5 rounded text-sm"
-                                      {...rest}
-                                    >
-                                      {children}
-                                    </code>
-                                  );
-                                },
-                                a({ node, children, href, ...props }) {
-                                  return (
-                                    <a
-                                      href={href}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="text-blue-500 hover:text-blue-700 inline-flex items-center"
+                                p: ({ node, ...props }) => (
+                                  <p className="my-2" {...props} />
+                                ),
+                                h2: ({ node, ...props }) => (
+                                  <div>
+                                    <h2
+                                      className="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-500 to-purple-500 my-4"
                                       {...props}
-                                    >
-                                      {children}
-                                      <ExternalLink className="h-3 w-3 ml-1" />
-                                    </a>
-                                  );
-                                },
+                                    />
+                                    <hr className="my-4 border-gray-700" />
+                                  </div>
+                                ),
+                                h3: ({ node, ...props }) => (
+                                  <div>
+                                    <h3
+                                      className="text-xl font-bold mt-10 my-3"
+                                      {...props}
+                                    />
+                                    <hr className="my-4 border-gray-300" />
+                                  </div>
+                                ),
+                                a: ({ node, ...props }) => (
+                                  <a
+                                    className="text-blue-500 underline"
+                                    {...props}
+                                  />
+                                ),
+                                li: ({ node, ...props }) => (
+                                  <li className="list-disc ml-4" {...props} />
+                                ),
+                                ul: ({ node, ...props }) => (
+                                  <ul className="list-disc ml-4" {...props} />
+                                ),
+                                ol: ({ node, ...props }) => (
+                                  <ol
+                                    className="list-decimal ml-4"
+                                    {...props}
+                                  />
+                                ),
+                                // 他の基本的なスタイリング
                               }}
                             >
                               {message.content}

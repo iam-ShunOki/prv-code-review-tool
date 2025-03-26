@@ -82,8 +82,51 @@ export default function GroupsPage() {
         }
 
         const data = await response.json();
-        setGroups(data.data || []);
-        setFilteredGroups(data.data || []);
+        const groups = data.data || [];
+
+        // 各グループのメンバー数を計算して追加
+        const enhancedGroups = await Promise.all(
+          groups.map(async (group: { id: any; review_count: any }) => {
+            try {
+              // メンバー情報を取得
+              const membersResponse = await fetch(
+                `${process.env.NEXT_PUBLIC_API_URL}/api/groups/${group.id}/members`,
+                {
+                  headers: {
+                    Authorization: `Bearer ${token}`,
+                  },
+                }
+              );
+
+              if (membersResponse.ok) {
+                const membersData = await membersResponse.json();
+                const members = membersData.data || [];
+
+                return {
+                  ...group,
+                  member_count: members.length,
+                  // すでにreview_countが含まれている場合は上書きしない
+                  review_count: group.review_count || 0,
+                };
+              }
+            } catch (error) {
+              console.error(
+                `グループ ${group.id} のメンバー取得エラー:`,
+                error
+              );
+            }
+
+            // エラーが発生した場合やレスポンスが正常でない場合のデフォルト値
+            return {
+              ...group,
+              member_count: 0,
+              review_count: group.review_count || 0,
+            };
+          })
+        );
+
+        setGroups(enhancedGroups);
+        setFilteredGroups(enhancedGroups);
       } catch (error) {
         console.error("グループ取得エラー:", error);
         toast({

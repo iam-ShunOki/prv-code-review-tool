@@ -95,6 +95,7 @@ export default function ProjectDetailPage({
 
       setIsLoading(true);
       try {
+        // プロジェクト基本情報を取得
         const response = await fetch(
           `${process.env.NEXT_PUBLIC_API_URL}/api/projects/${params.id}`,
           {
@@ -108,8 +109,61 @@ export default function ProjectDetailPage({
           throw new Error("プロジェクト情報の取得に失敗しました");
         }
 
-        const data = await response.json();
-        setProject(data.data);
+        const projectData = await response.json();
+        let projectInfo = projectData.data;
+
+        // メンバー情報が不足している場合は取得
+        if (
+          !projectInfo.userProjects ||
+          projectInfo.userProjects.length === 0
+        ) {
+          try {
+            const membersResponse = await fetch(
+              `${process.env.NEXT_PUBLIC_API_URL}/api/projects/${params.id}/members`,
+              {
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                },
+              }
+            );
+
+            if (membersResponse.ok) {
+              const membersData = await membersResponse.json();
+              projectInfo = {
+                ...projectInfo,
+                userProjects: membersData.data || [],
+              };
+            }
+          } catch (error) {
+            console.error("メンバー情報取得エラー:", error);
+          }
+        }
+
+        // レビュー情報が不足している場合は取得
+        if (!projectInfo.reviews || projectInfo.reviews.length === 0) {
+          try {
+            const reviewsResponse = await fetch(
+              `${process.env.NEXT_PUBLIC_API_URL}/api/projects/${params.id}/reviews`,
+              {
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                },
+              }
+            );
+
+            if (reviewsResponse.ok) {
+              const reviewsData = await reviewsResponse.json();
+              projectInfo = {
+                ...projectInfo,
+                reviews: reviewsData.data || [],
+              };
+            }
+          } catch (error) {
+            console.error("レビュー情報取得エラー:", error);
+          }
+        }
+
+        setProject(projectInfo);
       } catch (error) {
         console.error("プロジェクト詳細取得エラー:", error);
         toast({
@@ -409,7 +463,16 @@ export default function ProjectDetailPage({
                     {project.userProjects.map((membership) => (
                       <TableRow key={membership.id}>
                         <TableCell className="font-medium">
-                          {membership.user.name}
+                          {isAdmin ? (
+                            <a
+                              className="text-blue-500 hover:underline"
+                              href={`/dashboard/employees/${membership.user.id}`}
+                            >
+                              {membership.user.name}
+                            </a>
+                          ) : (
+                            membership.user.name
+                          )}
                         </TableCell>
                         <TableCell>{membership.user.email}</TableCell>
                         <TableCell>

@@ -102,6 +102,7 @@ export default function GroupDetailPage({
 
       setIsLoading(true);
       try {
+        // グループ詳細を取得
         const response = await fetch(
           `${process.env.NEXT_PUBLIC_API_URL}/api/groups/${params.id}`,
           {
@@ -115,8 +116,33 @@ export default function GroupDetailPage({
           throw new Error("グループ情報の取得に失敗しました");
         }
 
-        const data = await response.json();
-        setGroup(data.data);
+        const groupData = await response.json();
+        const groupInfo = groupData.data;
+
+        // グループメンバーを取得
+        const membersResponse = await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL}/api/groups/${params.id}/members`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }
+        );
+
+        if (!membersResponse.ok) {
+          throw new Error("メンバー情報の取得に失敗しました");
+        }
+
+        const membersData = await membersResponse.json();
+        const members = membersData.data || [];
+
+        // グループ情報にメンバー情報を追加
+        const groupWithMembers = {
+          ...groupInfo,
+          members: members,
+        };
+
+        setGroup(groupWithMembers);
       } catch (error) {
         console.error("グループ詳細取得エラー:", error);
         toast({
@@ -180,6 +206,8 @@ export default function GroupDetailPage({
   // メンバーの役割を表示
   const getRoleName = (role: string) => {
     switch (role) {
+      case "manager":
+        return "管理者";
       case "leader":
         return "リーダー";
       case "member":
@@ -371,7 +399,16 @@ export default function GroupDetailPage({
                     {group.members.map((member) => (
                       <TableRow key={member.id}>
                         <TableCell className="font-medium">
-                          {member.user.name}
+                          {isAdmin ? (
+                            <a
+                              className="text-blue-500 hover:underline"
+                              href={`/dashboard/employees/${member.user.id}`}
+                            >
+                              {member.user.name}
+                            </a>
+                          ) : (
+                            member.user.name
+                          )}
                         </TableCell>
                         <TableCell>{member.user.email}</TableCell>
                         <TableCell>
