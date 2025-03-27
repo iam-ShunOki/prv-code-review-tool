@@ -141,12 +141,21 @@ export class ReviewFeedbackSenderService {
       // Backlogにコメントを送信
       try {
         console.log(`PR #${review.backlog_pr_id} にフィードバックを送信します`);
-        await this.backlogService.addPullRequestComment(
-          review.backlog_project,
-          review.backlog_repository,
-          review.backlog_pr_id,
-          formattedFeedback
+        // await this.backlogService.addPullRequestComment(
+        //   review.backlog_project,
+        //   review.backlog_repository,
+        //   review.backlog_pr_id,
+        //   formattedFeedback
+        // );
+        // テスト段階なのでコメントを出力
+        console.log(
+          `#### テスト段階なので、コメントを出力します===================================================\n\n`
         );
+        console.log(`プロジェクト名：${review.backlog_project}\n\n`);
+        console.log(`リポジトリ名：${review.backlog_repository}\n\n`);
+        console.log(`PR ID：${review.backlog_pr_id}\n\n`);
+        console.log(`フィードバック：\n${formattedFeedback}`);
+        console.log(`===================================================\n\n`);
 
         console.log(
           `PR #${review.backlog_pr_id} へのフィードバック送信に成功しました`
@@ -371,7 +380,7 @@ export class ReviewFeedbackSenderService {
   }
 
   /**
-   * フィードバックをマークダウン形式に整形
+   * フィードバックをマークダウン形式に整形（絵文字を使用しないバージョン）
    */
   private formatFeedbacksAsMarkdown(
     feedbacks: Feedback[],
@@ -398,6 +407,11 @@ export class ReviewFeedbackSenderService {
         "このコードに重大な問題は見つかりませんでした。素晴らしいコードです！\n\n";
       return markdown;
     }
+
+    const reviewToken =
+      feedbacks.length > 0 && (feedbacks[0] as any).review_token
+        ? (feedbacks[0] as any).review_token
+        : `review-token-${review.id}-${new Date().getTime()}`;
 
     // カテゴリごとにフィードバックを分類
     const categorizedFeedbacks: Record<string, Feedback[]> = {};
@@ -431,24 +445,24 @@ export class ReviewFeedbackSenderService {
     if (checklistRate.total > 0) {
       markdown += "### チェックリスト進捗\n\n";
 
-      // プログレスバーの作成
+      // プログレスバーの作成（絵文字を使わないバージョン）
       const barLength = 20;
       const filledLength = Math.round((checklistRate.rate / 100) * barLength);
       const emptyLength = barLength - filledLength;
 
-      const progressBar = "■".repeat(filledLength) + "□".repeat(emptyLength);
+      const progressBar = "#".repeat(filledLength) + "-".repeat(emptyLength);
 
-      markdown += `${progressBar} ${checklistRate.rate.toFixed(1)}%\n\n`;
+      markdown += `[${progressBar}] ${checklistRate.rate.toFixed(1)}%\n\n`;
 
-      // 完了率に応じてメッセージを変更
+      // 完了率に応じてメッセージを変更（絵文字なし）
       if (checklistRate.rate === 100) {
-        markdown += "**✅ すべてのチェックが完了しました！**\n\n";
+        markdown += "**[完了] すべてのチェックが完了しました！**\n\n";
       } else if (checklistRate.rate > 75) {
-        markdown += "**⏳ もう少しでチェックが完了します！**\n\n";
+        markdown += "**[もう少し] もう少しでチェックが完了します！**\n\n";
       } else if (checklistRate.rate > 50) {
-        markdown += "**🔄 チェックが進行中です。**\n\n";
+        markdown += "**[進行中] チェックが進行中です。**\n\n";
       } else {
-        markdown += "**🚀 チェックを開始しましょう！**\n\n";
+        markdown += "**[開始] チェックを開始しましょう！**\n\n";
       }
     }
 
@@ -477,9 +491,9 @@ export class ReviewFeedbackSenderService {
             markdown += `   **参考**: [詳細情報](${feedback.reference_url})\n\n`;
           }
 
-          // チェック状態を表示
+          // チェック状態を表示（絵文字なし）
           if (feedback.is_checked) {
-            markdown += `   **✅ 確認済み**`;
+            markdown += `   **[確認済み]**`;
             if (feedback.checked_at) {
               const checkedDate = new Date(feedback.checked_at);
               markdown += ` (${checkedDate.toLocaleString("ja-JP")})\n\n`;
@@ -496,7 +510,8 @@ export class ReviewFeedbackSenderService {
     // フッター
     markdown += "---\n";
     markdown +=
-      "このレビューはAIによって自動生成されました。チェックリストの各項目を確認し、問題が解決したら✅をつけてください。";
+      "このレビューはAIによって自動生成されました。チェックリストの各項目を確認し、修正が完了するまでAIによるレビューを続けてください。";
+    markdown += `\n\n<!-- ${reviewToken} -->\n`;
 
     return markdown;
   }

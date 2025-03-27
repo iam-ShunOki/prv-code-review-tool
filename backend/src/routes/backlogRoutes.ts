@@ -57,35 +57,42 @@ router.get(
   backlogWebhookController.getWebhookInfo
 );
 
-// 新API追加: ブランチ一覧取得
+// 新API追加: プルリクエストのレビュー履歴を取得
+router.get(
+  "/pullrequest-history/:projectKey/:repoName/:pullRequestId",
+  authenticate,
+  backlogWebhookController.getPullRequestReviewHistory
+);
+
+// ブランチ一覧取得
 router.get(
   "/projects/:projectId/repositories/:repoId/branches",
   authenticate,
   backlogController.getBranches
 );
 
-// 新API追加: ファイルツリー取得
+// ファイルツリー取得
 router.get(
   "/projects/:projectId/repositories/:repoId/tree",
   authenticate,
   backlogController.getFileTree
 );
 
-// 新API追加: プルリクエストコメント一覧を取得
+// プルリクエストコメント一覧を取得
 router.get(
   "/projects/:projectId/repositories/:repoId/pullRequests/:pullRequestId/comments",
   authenticate,
   backlogController.getPullRequestComments
 );
 
-// 新API追加: ファイル内容を取得
+// ファイル内容を取得
 router.get(
   "/projects/:projectId/repositories/:repoId/contents",
   authenticate,
   backlogController.getFileContent
 );
 
-// 新API追加: リポジトリマッピング関連
+// リポジトリマッピング関連
 router.get(
   "/repositories/mappings",
   authenticate,

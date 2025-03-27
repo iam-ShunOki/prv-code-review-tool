@@ -1,4 +1,4 @@
-// src/services/AutomaticReviewCreator.ts
+// backend/src/services/AutomaticReviewCreator.ts
 import { AppDataSource } from "../index";
 import { Review, ReviewStatus } from "../models/Review";
 import { User, UserRole } from "../models/User";
@@ -26,6 +26,14 @@ interface PullRequestData {
   authorMailAddress?: string | null;
 }
 
+interface ReviewContext {
+  isReReview?: boolean;
+  reviewHistory?: any[];
+  comments?: any[];
+  existingReviewId?: number;
+  sourceCommentId?: number;
+}
+
 export class AutomaticReviewCreator {
   private reviewRepository: Repository<Review>;
   private userRepository: Repository<User>;
@@ -42,11 +50,18 @@ export class AutomaticReviewCreator {
   }
 
   /**
-   * プルリクエストからレビューを作成
+   * プルリクエストからレビューを作成（コンテキスト拡張版）
    */
-  async createReviewFromPullRequest(prData: PullRequestData): Promise<Review> {
+  async createReviewFromPullRequest(
+    prData: PullRequestData,
+    context?: ReviewContext
+  ): Promise<Review> {
     console.log(
-      `Creating review from PR #${prData.number} (id: ${prData.id}): ${prData.summary}`
+      `PR #${prData.number} (${prData.project}/${
+        prData.repository
+      }) からレビューを作成します ${
+        context?.isReReview ? "【再レビュー】" : "【初回レビュー】"
+      }`
     );
 
     let tempRepoDir = "";
@@ -54,37 +69,68 @@ export class AutomaticReviewCreator {
 
     try {
       // 既存のレビューがあるか確認
-      const existingReview = await this.reviewRepository.findOne({
-        where: {
-          backlog_pr_id: prData.number,
-          backlog_project: prData.project,
-          backlog_repository: prData.repository,
-        },
-      });
+      let existingReview = null;
 
-      if (existingReview) {
+      if (context?.existingReviewId) {
+        existingReview = await this.reviewRepository.findOne({
+          where: { id: context.existingReviewId },
+        });
+      } else {
+        existingReview = await this.reviewRepository.findOne({
+          where: {
+            backlog_pr_id: prData.number,
+            backlog_project: prData.project,
+            backlog_repository: prData.repository,
+          },
+        });
+      }
+
+      if (existingReview && !context?.isReReview) {
         console.log(
-          `Review already exists for PR #${prData.number}: review ID #${existingReview.id}`
+          `PR #${prData.number} のレビューは既に存在します: レビューID #${existingReview.id}`
         );
         return existingReview;
       }
 
       // ユーザーを見つけるか作成
       const user = await this.findOrCreateUser(prData);
-      console.log(`Using user ${user.name} (${user.email}) with ID ${user.id}`);
+      console.log(
+        `ユーザー ${user.name} (${user.email}) ID: ${user.id} を使用します`
+      );
 
-      // レビューを作成
-      const review = new Review();
-      review.user_id = user.id;
-      review.title = `PR #${prData.number}: ${prData.summary}`;
-      review.description = `Backlogプルリクエストから自動作成されたレビュー\n\n${prData.description}\n\nProject: ${prData.project}\nRepository: ${prData.repository}\nBranch: ${prData.branch}`;
-      review.status = ReviewStatus.PENDING;
-      review.backlog_pr_id = prData.number;
-      review.backlog_project = prData.project;
-      review.backlog_repository = prData.repository;
+      // 新しいレビューを作成するか、既存のレビューを使用
+      let review: Review;
 
-      const savedReview = await this.reviewRepository.save(review);
-      console.log(`Created review #${savedReview.id} for PR #${prData.number}`);
+      if (existingReview && context?.isReReview) {
+        review = existingReview;
+        review.description = `Backlogプルリクエストから更新されたレビュー (${new Date().toLocaleString(
+          "ja-JP"
+        )})\n\n${prData.description}\n\nProject: ${
+          prData.project
+        }\nRepository: ${prData.repository}\nBranch: ${prData.branch}`;
+        review.status = ReviewStatus.PENDING;
+
+        await this.reviewRepository.save(review);
+        console.log(
+          `既存のレビュー #${review.id} を更新しました (PR #${prData.number})`
+        );
+      } else {
+        // 新規レビューを作成
+        review = new Review();
+        review.user_id = user.id;
+        review.title = `PR #${prData.number}: ${prData.summary}`;
+        review.description = `Backlogプルリクエストから自動作成されたレビュー\n\n${prData.description}\n\nProject: ${prData.project}\nRepository: ${prData.repository}\nBranch: ${prData.branch}`;
+        review.status = ReviewStatus.PENDING;
+        review.backlog_pr_id = prData.number;
+        review.backlog_project = prData.project;
+        review.backlog_repository = prData.repository;
+
+        const savedReview = await this.reviewRepository.save(review);
+        review = savedReview;
+        console.log(
+          `新規レビュー #${review.id} を作成しました (PR #${prData.number})`
+        );
+      }
 
       // コード取得とコード提出作成
       let codeContent = "";
@@ -94,12 +140,17 @@ export class AutomaticReviewCreator {
         // 自動クリーンアップタイマー設定（10分後）
         cleanupTimer = setTimeout(async () => {
           if (tempRepoDir) {
-            console.log(`Cleanup timer triggered for ${tempRepoDir}`);
+            console.log(
+              `クリーンアップタイマーが実行されました: ${tempRepoDir}`
+            );
             try {
               await this.backlogService.cleanupRepository(tempRepoDir);
               tempRepoDir = ""; // クリーンアップ後は空文字列に設定
             } catch (timeoutError) {
-              console.error(`Error in cleanup timeout:`, timeoutError);
+              console.error(
+                `クリーンアップタイマーでエラーが発生しました:`,
+                timeoutError
+              );
             }
           }
         }, 10 * 60 * 1000);
@@ -110,7 +161,7 @@ export class AutomaticReviewCreator {
           prData.repository,
           prData.base
         );
-        console.log(`Cloned repository to ${tempRepoDir}`);
+        console.log(`リポジトリを ${tempRepoDir} にクローンしました`);
 
         // 差分を取得
         const diffData = await this.backlogService.getPullRequestDiff(
@@ -121,9 +172,7 @@ export class AutomaticReviewCreator {
 
         // 差分からコード内容を抽出
         codeContent = this.extractCodeFromDiff(diffData);
-        console.log(
-          `Extracted code content (${codeContent.length} characters)`
-        );
+        console.log(`コード内容を抽出しました (${codeContent.length} 文字)`);
 
         // タイマーをクリア
         if (cleanupTimer) {
@@ -135,16 +184,19 @@ export class AutomaticReviewCreator {
         if (tempRepoDir) {
           try {
             await this.backlogService.cleanupRepository(tempRepoDir);
-            console.log(`Cleaned up repository at ${tempRepoDir}`);
+            console.log(`リポジトリを削除しました: ${tempRepoDir}`);
             tempRepoDir = ""; // クリーンアップ後は空文字列に設定
           } catch (cleanupError) {
-            console.error(`Error cleaning up repository:`, cleanupError);
+            console.error(
+              `リポジトリ削除中にエラーが発生しました:`,
+              cleanupError
+            );
             // エラーがあっても処理を継続
           }
         }
       } catch (codeError) {
         console.error(
-          `Error retrieving code for PR #${prData.number}:`,
+          `PR #${prData.number} のコード取得中にエラーが発生しました:`,
           codeError
         );
         codeContent = `// エラーが発生したため、コードを取得できませんでした。\n// ${
@@ -159,11 +211,15 @@ export class AutomaticReviewCreator {
         submissionId = await AppDataSource.transaction(async (manager) => {
           // コード提出を作成
           const submission = new CodeSubmission();
-          submission.review_id = savedReview.id;
+          submission.review_id = review.id;
           submission.code_content =
             codeContent ||
-            `// No code content available for PR #${prData.number}`;
-          submission.expectation = `Backlogプルリクエスト #${prData.number} (${prData.project}/${prData.repository}) から自動作成されました。`;
+            `// PR #${prData.number} (${prData.project}/${prData.repository}) のコード内容を取得できませんでした`;
+          submission.expectation = `Backlogプルリクエスト #${prData.number} (${
+            prData.project
+          }/${prData.repository}) から自動作成されました。${
+            context?.isReReview ? "【再レビュー】" : ""
+          }`;
           submission.status = SubmissionStatus.SUBMITTED;
           submission.version = 1;
 
@@ -173,54 +229,57 @@ export class AutomaticReviewCreator {
             submission
           );
           console.log(
-            `Created submission #${savedSubmission.id} for review #${savedReview.id}`
+            `コード提出 #${savedSubmission.id} をレビュー #${review.id} に作成しました`
           );
 
           // レビューのステータスを更新
-          savedReview.status = ReviewStatus.IN_PROGRESS;
-          await manager.save(Review, savedReview);
+          review.status = ReviewStatus.IN_PROGRESS;
+          await manager.save(Review, review);
 
           return savedSubmission.id;
         });
 
         console.log(
-          `Submission #${submissionId} successfully saved in transaction`
+          `コード提出 #${submissionId} をトランザクションで保存しました`
         );
       } catch (txError) {
         console.error(
-          `Transaction error creating submission for review #${savedReview.id}:`,
+          `レビュー #${review.id} のコード提出作成中にトランザクションエラーが発生しました:`,
           txError
         );
         throw new Error(
-          `Failed to create submission: ${
+          `コード提出の作成に失敗しました: ${
             txError instanceof Error ? txError.message : String(txError)
           }`
         );
       }
 
-      // トランザクション完了後にキューに追加（遅延付き）
+      // トランザクション完了後にAIレビューを実行
       if (submissionId) {
         try {
-          console.log(`Starting direct AI review for PR #${prData.number}`);
+          console.log(
+            `PR #${prData.number} のAIレビューを開始します ${
+              context?.isReReview ? "【再レビュー】" : ""
+            }`
+          );
 
           // AIServiceを初期化
           const aiService = new AIService();
 
-          // 直接プルリクエストレビューを実行
+          // プルリクエストレビューを実行（コンテキスト付き）
           const reviewFeedbacks = await aiService.reviewPullRequest(
             prData.project,
             prData.repository,
-            prData.number
+            prData.number,
+            {
+              isReReview: context?.isReReview || false,
+              reviewHistory: context?.reviewHistory || [],
+              comments: context?.comments || [],
+            }
           );
 
           console.log(
-            `Generated ${reviewFeedbacks.length} feedbacks for PR #${prData.number}`
-          );
-
-          console.log(
-            `これはFeedbackに登録する直前のコンソール出力です。\n\n reviewFeedbacks: \n\n ${JSON.stringify(
-              reviewFeedbacks
-            )}\n\n`
+            `PR #${prData.number} に対して ${reviewFeedbacks.length} 件のフィードバックを生成しました`
           );
 
           // フィードバックをデータベースに保存
@@ -231,8 +290,9 @@ export class AutomaticReviewCreator {
               problem_point: feedback.problem_point,
               suggestion: feedback.suggestion,
               priority: feedback.priority,
-              reference_url: feedback.reference_url, // もし存在する場合
+              reference_url: feedback.reference_url,
               code_snippet: feedback.code_snippet,
+              category: feedback.category,
             });
           }
 
@@ -244,25 +304,25 @@ export class AutomaticReviewCreator {
           );
 
           console.log(
-            `Review completed and feedbacks saved for PR #${prData.number}`
+            `PR #${prData.number} のレビューが完了し、フィードバックを保存しました`
           );
 
-          // オプション: BacklogPRにコメントを送信（すぐに結果を返す場合）
+          // オプション: BacklogPRにコメントを送信
           try {
             const reviewFeedbackSender = new ReviewFeedbackSenderService();
             await reviewFeedbackSender.sendReviewFeedbackToPullRequest(
-              savedReview.id
+              review.id
             );
           } catch (sendError) {
             console.error(
-              `Error sending feedback to PR #${prData.number}:`,
+              `PR #${prData.number} へのフィードバック送信中にエラーが発生しました:`,
               sendError
             );
             // 送信エラーは無視して処理を継続
           }
         } catch (reviewError) {
           console.error(
-            `Error performing AI review for PR #${prData.number}:`,
+            `PR #${prData.number} のAIレビュー中にエラーが発生しました:`,
             reviewError
           );
 
@@ -288,10 +348,10 @@ export class AutomaticReviewCreator {
         }
       }
 
-      return savedReview;
+      return review;
     } catch (error) {
       console.error(
-        `Critical error creating review from PR #${prData.number}:`,
+        `PR #${prData.number} からのレビュー作成中に重大なエラーが発生しました:`,
         error
       );
       throw error;
@@ -304,10 +364,13 @@ export class AutomaticReviewCreator {
       // 一時ディレクトリのクリーンアップ (finallyブロックで必ず実行)
       if (tempRepoDir) {
         try {
-          console.log(`Final cleanup of temp directory: ${tempRepoDir}`);
+          console.log(`最終クリーンアップ: ${tempRepoDir}`);
           await this.backlogService.cleanupRepository(tempRepoDir);
         } catch (cleanupError) {
-          console.error(`Error in final cleanup:`, cleanupError);
+          console.error(
+            `最終クリーンアップでエラーが発生しました:`,
+            cleanupError
+          );
         }
       }
     }
@@ -338,7 +401,7 @@ export class AutomaticReviewCreator {
       }
 
       // 新しいユーザーを作成
-      console.log(`Creating new user: ${name} (${email})`);
+      console.log(`新規ユーザーを作成します: ${name} (${email})`);
       user = new User();
       user.name = name;
       user.email = email;
@@ -348,7 +411,7 @@ export class AutomaticReviewCreator {
       return await this.userRepository.save(user);
     } catch (error) {
       console.error(
-        `Error finding/creating user for ${name} (${email}):`,
+        `ユーザー ${name} (${email}) の検索/作成中にエラーが発生しました:`,
         error
       );
 
@@ -368,12 +431,12 @@ export class AutomaticReviewCreator {
    * 差分データからコード内容を抽出（改善版）
    */
   private extractCodeFromDiff(diffData: any): string {
-    console.log("Extracting code from diff data");
+    console.log("差分データからコード内容を抽出します");
 
     // デバッグ情報を追加
-    console.log(`Diff data type: ${typeof diffData}`);
+    console.log(`差分データの型: ${typeof diffData}`);
     if (typeof diffData === "object") {
-      console.log(`Diff data keys: ${Object.keys(diffData).join(", ")}`);
+      console.log(`差分データのキー: ${Object.keys(diffData).join(", ")}`);
       console.log(
         `変更されたファイル: ${JSON.stringify(diffData.changedFiles)}`
       );
@@ -381,7 +444,7 @@ export class AutomaticReviewCreator {
 
     // すでに文字列の場合はそのまま返す
     if (typeof diffData === "string") {
-      console.log(`Received string diff data (${diffData.length} chars)`);
+      console.log(`文字列の差分データを受信しました (${diffData.length} 文字)`);
       return diffData;
     }
 
@@ -393,22 +456,22 @@ export class AutomaticReviewCreator {
       // PR情報を取得
       if (diffData.pullRequest) {
         const pr = diffData.pullRequest;
-        extractedCode += `// Pull Request #${pr.number}: ${pr.summary}\n`;
-        extractedCode += `// Branch: ${pr.branch}\n`;
-        extractedCode += `// Base: ${pr.base}\n\n`;
-        debugging += `Found PR info: #${pr.number}\n`;
+        extractedCode += `// プルリクエスト #${pr.number}: ${pr.summary}\n`;
+        extractedCode += `// ブランチ: ${pr.branch}\n`;
+        extractedCode += `// ベース: ${pr.base}\n\n`;
+        debugging += `PR情報を取得しました: #${pr.number}\n`;
       }
 
       // コミット情報を処理
       if (diffData.commits && Array.isArray(diffData.commits)) {
-        extractedCode += `// Changes from ${diffData.commits.length} commits\n\n`;
-        debugging += `Found ${diffData.commits.length} commits\n`;
+        extractedCode += `// ${diffData.commits.length} コミットの変更内容\n\n`;
+        debugging += `${diffData.commits.length} コミットを見つけました\n`;
 
         // 最大5件のコミットメッセージを表示
         diffData.commits
           .slice(0, 5)
           .forEach((commit: { message: any }, index: number) => {
-            extractedCode += `// Commit ${index + 1}: ${commit.message}\n`;
+            extractedCode += `// コミット ${index + 1}: ${commit.message}\n`;
           });
         extractedCode += "\n";
       }
@@ -422,27 +485,27 @@ export class AutomaticReviewCreator {
 
       // CASE 1: ルート階層に直接diffs配列がある場合
       if (Array.isArray(diffData)) {
-        debugging += `Processing array of diffs (${diffData.length} items)\n`;
+        debugging += `diffs配列を処理します (${diffData.length} 項目)\n`;
         for (const diff of diffData) {
           if (typeof diff === "object" && diff !== null) {
             // ファイル情報の追加
             if (diff.path) {
-              extractedCode += `\n// File: ${diff.path}\n`;
-              debugging += `Found file: ${diff.path}\n`;
+              extractedCode += `\n// ファイル: ${diff.path}\n`;
+              debugging += `ファイルを見つけました: ${diff.path}\n`;
             }
 
             // hunksの処理
             if (diff.hunks && Array.isArray(diff.hunks)) {
-              debugging += `Found ${diff.hunks.length} hunks\n`;
+              debugging += `${diff.hunks.length} ハンクを見つけました\n`;
               for (const hunk of diff.hunks) {
                 if (hunk.content) {
                   extractedCode += hunk.content + "\n";
-                  debugging += `Added hunk content (${hunk.content.length} chars)\n`;
+                  debugging += `ハンク内容を追加しました (${hunk.content.length} 文字)\n`;
                 } else if (hunk.lines && Array.isArray(hunk.lines)) {
                   for (const line of hunk.lines) {
                     extractedCode += line + "\n";
                   }
-                  debugging += `Added ${hunk.lines.length} lines from hunk\n`;
+                  debugging += `ハンクから ${hunk.lines.length} 行を追加しました\n`;
                 }
               }
             }
@@ -451,27 +514,27 @@ export class AutomaticReviewCreator {
       }
       // CASE 2: diffData.diffs配列がある場合
       else if (diffData.diffs && Array.isArray(diffData.diffs)) {
-        debugging += `Processing diffData.diffs (${diffData.diffs.length} items)\n`;
+        debugging += `diffData.diffs を処理します (${diffData.diffs.length} 項目)\n`;
 
         for (const commitDiff of diffData.diffs) {
           if (commitDiff.diffs && Array.isArray(commitDiff.diffs)) {
             for (const fileDiff of commitDiff.diffs) {
               if (fileDiff.path) {
-                extractedCode += `\n// File: ${fileDiff.path}\n`;
-                debugging += `Found file: ${fileDiff.path}\n`;
+                extractedCode += `\n// ファイル: ${fileDiff.path}\n`;
+                debugging += `ファイルを見つけました: ${fileDiff.path}\n`;
               }
 
               if (fileDiff.hunks && Array.isArray(fileDiff.hunks)) {
-                debugging += `Found ${fileDiff.hunks.length} hunks\n`;
+                debugging += `${fileDiff.hunks.length} ハンクを見つけました\n`;
                 for (const hunk of fileDiff.hunks) {
                   if (hunk.content) {
                     extractedCode += hunk.content + "\n";
-                    debugging += `Added hunk content (${hunk.content.length} chars)\n`;
+                    debugging += `ハンク内容を追加しました (${hunk.content.length} 文字)\n`;
                   } else if (hunk.lines && Array.isArray(hunk.lines)) {
                     for (const line of hunk.lines) {
                       extractedCode += line + "\n";
                     }
-                    debugging += `Added ${hunk.lines.length} lines from hunk\n`;
+                    debugging += `ハンクから ${hunk.lines.length} 行を追加しました\n`;
                   }
                 }
               }
@@ -482,26 +545,26 @@ export class AutomaticReviewCreator {
 
       // 内容がない場合のフォールバック
       if (!extractedCode || extractedCode.trim() === "") {
-        extractedCode = `// Could not extract code content from the pull request diff.\n`;
-        extractedCode += `// This might be because the PR doesn't have any code changes, or due to API limitations.\n`;
+        extractedCode = `// プルリクエストの差分からコード内容を抽出できませんでした。\n`;
+        extractedCode += `// PRに変更されたコードがないか、APIの制限により取得できなかった可能性があります。\n`;
 
         if (diffData.pullRequest) {
-          extractedCode += `\n// PR Title: ${diffData.pullRequest.summary}\n`;
-          extractedCode += `// PR Description: ${
-            diffData.pullRequest.description || "No description"
+          extractedCode += `\n// PRタイトル: ${diffData.pullRequest.summary}\n`;
+          extractedCode += `// PR説明: ${
+            diffData.pullRequest.description || "説明なし"
           }\n`;
         }
 
         // JSONダンプを追加してデバッグに役立てる
-        extractedCode += "\n// DEBUG INFO START\n";
+        extractedCode += "\n// デバッグ情報開始\n";
         extractedCode += "// " + debugging.replace(/\n/g, "\n// ");
         try {
           const diffStr = JSON.stringify(diffData).substring(0, 1000);
-          extractedCode += `\n// Diff data (truncated): ${diffStr}...\n`;
+          extractedCode += `\n// 差分データ (省略): ${diffStr}...\n`;
         } catch (e) {
-          extractedCode += "\n// Could not stringify diff data\n";
+          extractedCode += "\n// 差分データをJSON化できませんでした\n";
         }
-        extractedCode += "// DEBUG INFO END\n";
+        extractedCode += "// デバッグ情報終了\n";
       }
 
       // ローカルデバッグ用のファイル出力（開発環境のみ）
@@ -521,28 +584,28 @@ export class AutomaticReviewCreator {
             extractedCode
           );
 
-          console.log(`Saved extracted code to debug file for inspection`);
+          console.log(`抽出したコードをデバッグファイルに保存しました`);
         } catch (e) {
-          console.error("Error saving debug file:", e);
+          console.error("デバッグファイル保存エラー:", e);
         }
       }
     } catch (error) {
-      console.error("Error extracting code from diff:", error);
+      console.error("差分からコード抽出中にエラーが発生しました:", error);
       const errorMessage =
         error instanceof Error ? error.message : String(error);
-      extractedCode = `// Error extracting code: ${errorMessage}\n`;
-      extractedCode += `// Raw diff data: ${JSON.stringify(diffData).substring(
+      extractedCode = `// コード抽出エラー: ${errorMessage}\n`;
+      extractedCode += `// 生の差分データ: ${JSON.stringify(diffData).substring(
         0,
         1000
       )}...\n`;
     }
 
-    console.log(`Extracted code length: ${extractedCode.length} characters`);
+    console.log(`抽出したコードの長さ: ${extractedCode.length} 文字`);
 
     // 抽出したコードの一部をログに出力
     const previewLength = Math.min(200, extractedCode.length);
     console.log(
-      `Extracted code preview: ${extractedCode.substring(0, previewLength)}${
+      `抽出コードのプレビュー: ${extractedCode.substring(0, previewLength)}${
         extractedCode.length > previewLength ? "..." : ""
       }`
     );

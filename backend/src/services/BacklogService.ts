@@ -101,30 +101,50 @@ export class BacklogService {
   async getPullRequests(
     projectIdOrKey: string,
     repoIdOrName: string,
-    statusId: string = "all"
+    statusType: string = "open"
   ) {
-    const params = new URLSearchParams({
-      apiKey: this.apiKey,
-      statusId,
-    });
-
-    const url = `${
-      this.baseUrl
-    }/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/pullRequests?${params.toString()}`;
-
     try {
-      console.log(
-        `プルリクエスト一覧取得: ${projectIdOrKey}/${repoIdOrName} (ステータス: ${statusId})`
+      // statusIdパラメータを使用せず、正しいパラメータを使用
+      // Backlog API v2 では statusId ではなく status が正しいパラメータ名
+      // またはパラメータなしでリクエスト
+      const response = await axios.get(
+        `${this.baseUrl}/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/pullRequests`,
+        {
+          params: {
+            apiKey: this.apiKey,
+            // statusId パラメータは無効なので削除
+          },
+        }
       );
-      const response = await axios.get(url);
-      console.log(`取得成功: ${response.data.length}件のプルリクエスト`);
-      return response.data;
+
+      console.log(
+        `プルリクエスト一覧取得: ${projectIdOrKey}/${repoIdOrName} 成功`
+      );
+
+      // ステータスでのフィルタリングをコード内で行う
+      let result = response.data;
+      if (statusType === "open") {
+        // APIから取得したデータをコード側でフィルタリング
+        result = result.filter(
+          (pr: any) => pr.status && pr.status.name === "Open"
+        );
+      }
+
+      console.log(`取得成功: ${result.length}件のプルリクエスト`);
+      return result;
     } catch (error) {
       console.error(
         `プルリクエスト一覧取得エラー (${projectIdOrKey}/${repoIdOrName}):`,
         error
       );
-      throw error;
+
+      if (axios.isAxiosError(error) && error.response) {
+        console.error(`ステータス: ${error.response.status}`);
+        console.error(`詳細エラー: ${JSON.stringify(error.response.data)}`);
+      }
+
+      // エラー時は空配列を返す
+      return [];
     }
   }
 
@@ -142,16 +162,233 @@ export class BacklogService {
   }
 
   /**
-   * プルリクエストの差分を取得
+   * プルリクエストの差分を取得（改善版）
    */
   async getPullRequestDiff(
     projectIdOrKey: string,
     repoIdOrName: string,
-    number: number
-  ) {
-    return this.callApi(
-      `/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/pullRequests/${number}/diff`
-    );
+    pullRequestId: number
+  ): Promise<any> {
+    try {
+      console.log(`Getting diff for PR #${pullRequestId}`);
+
+      // 1. Get PR details
+      const prDetails = await this.getPullRequestById(
+        projectIdOrKey,
+        repoIdOrName,
+        pullRequestId
+      );
+
+      const baseBranch = prDetails.base;
+      const headBranch = prDetails.branch;
+
+      console.log(
+        `PR #${pullRequestId} - Base: ${baseBranch}, Head: ${headBranch}`
+      );
+
+      // 2. Use git directly for diff
+      let tempRepoDir = "";
+      try {
+        // Clone base branch repository
+        tempRepoDir = await this.cloneRepository(
+          projectIdOrKey,
+          repoIdOrName,
+          baseBranch,
+          false
+        );
+
+        // Fetch all branches
+        console.log(`${pullRequestId} のブランチを取得します`);
+        await execPromise(`cd ${tempRepoDir} && git fetch --all`);
+
+        // Verify branches exist
+        const { stdout: branchList } = await execPromise(
+          `cd ${tempRepoDir} && git branch -r`
+        );
+        console.log(`利用可能なリモートブランチ: ${branchList}`);
+
+        const remoteHeadBranch = `origin/${headBranch}`;
+        const remoteBaseBranch = `origin/${baseBranch}`;
+
+        if (!branchList.includes(remoteHeadBranch.trim())) {
+          console.warn(
+            `ヘッドブランチ ${remoteHeadBranch} が見つかりません。利用可能なブランチ: ${branchList}`
+          );
+          throw new Error(
+            `ヘッドブランチ ${headBranch} がリポジトリに見つかりません`
+          );
+        }
+
+        if (!branchList.includes(remoteBaseBranch.trim())) {
+          console.warn(
+            `ベースブランチ ${remoteBaseBranch} が見つかりません。利用可能なブランチ: ${branchList}`
+          );
+          throw new Error(
+            `ベースブランチ ${baseBranch} がリポジトリに見つかりません`
+          );
+        }
+
+        // 3. Get name-status to properly identify added/modified/deleted files
+        console.log(`${pullRequestId} のファイルステータスを取得します`);
+        const { stdout: nameStatusOutput } = await execPromise(
+          `cd ${tempRepoDir} && git diff --name-status ${remoteBaseBranch} ${remoteHeadBranch}`
+        );
+
+        // Parse name-status output
+        const fileStatuses = nameStatusOutput
+          .trim()
+          .split("\n")
+          .filter((line) => line.length > 0)
+          .map((line) => {
+            const [statusCode, ...pathParts] = line.split("\t");
+            const filePath = pathParts.join("\t"); // Handle paths with tabs
+            let status;
+
+            // Map git status codes to our status values
+            if (statusCode.startsWith("A")) status = "added";
+            else if (statusCode.startsWith("M")) status = "modified";
+            else if (statusCode.startsWith("D")) status = "deleted";
+            else if (statusCode.startsWith("R")) status = "renamed";
+            else status = "unknown";
+
+            return { filePath, status, statusCode };
+          });
+
+        console.log(`変更されたファイル: ${fileStatuses.length}`);
+
+        // 4. Checkout head branch to access all files including new ones
+        console.log(
+          `ヘッドブランチをチェックアウトします: ${remoteHeadBranch}`
+        );
+        await execPromise(
+          `cd ${tempRepoDir} && git checkout ${remoteHeadBranch}`
+        );
+
+        // 5. Get file details
+        const fileDetails = [];
+        for (const fileStatus of fileStatuses) {
+          try {
+            // Skip invalid entries
+            if (!fileStatus.filePath) continue;
+
+            let fileDiff = null;
+            let fileContent = null;
+
+            // Process based on file status
+            if (fileStatus.status === "deleted") {
+              // For deleted files, get the diff but not content
+              fileDiff = await this.safeExec(
+                `cd ${tempRepoDir} && git diff ${remoteBaseBranch} ${remoteHeadBranch} -- "${fileStatus.filePath}"`
+              );
+            } else {
+              // For added/modified files, get both diff and content
+              fileDiff = await this.safeExec(
+                `cd ${tempRepoDir} && git diff ${remoteBaseBranch} ${remoteHeadBranch} -- "${fileStatus.filePath}"`
+              );
+
+              // Get content from head branch (safe even for new files)
+              fileContent = await this.safeExec(
+                `cd ${tempRepoDir} && cat "${fileStatus.filePath}"`
+              );
+            }
+
+            fileDetails.push({
+              filePath: fileStatus.filePath,
+              status: fileStatus.status,
+              diff: fileDiff,
+              content: fileContent,
+              statusCode: fileStatus.statusCode,
+            });
+          } catch (fileError) {
+            console.error(
+              `ファイルの処理中にエラーが発生しました: ${fileStatus.filePath}`,
+              fileError
+            );
+            fileDetails.push({
+              filePath: fileStatus.filePath,
+              status: fileStatus.status,
+              diff: null,
+              content: null,
+              error:
+                fileError instanceof Error
+                  ? fileError.message
+                  : String(fileError),
+            });
+          }
+        }
+
+        return {
+          pullRequest: prDetails,
+          changedFiles: fileDetails,
+          baseCommit: remoteBaseBranch,
+          headCommit: remoteHeadBranch,
+        };
+      } catch (error) {
+        console.error(
+          `${pullRequestId} の処理中にエラーが発生しました:`,
+          error
+        );
+        if (error instanceof Error) {
+          console.error(`  Details: ${error.message}`);
+          if ("stdout" in error)
+            console.error(`  stdout: ${(error as any).stdout}`);
+          if ("stderr" in error)
+            console.error(`  stderr: ${(error as any).stderr}`);
+        }
+
+        throw error;
+      } finally {
+        // Clean up
+        if (tempRepoDir && fs.existsSync(tempRepoDir)) {
+          try {
+            await this.cleanupRepository(tempRepoDir);
+          } catch (cleanupError) {
+            console.error(
+              `Error cleaning up repo: ${tempRepoDir}`,
+              cleanupError
+            );
+          }
+        }
+      }
+    } catch (error) {
+      console.error(
+        `${pullRequestId} の差分取得中にエラーが発生しました:`,
+        error
+      );
+
+      // Fallback
+      try {
+        const prDetails = await this.getPullRequestById(
+          projectIdOrKey,
+          repoIdOrName,
+          pullRequestId
+        );
+        return {
+          pullRequest: prDetails,
+          changedFiles: [],
+          error: `Failed to fetch detailed diff: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        };
+      } catch (fallbackError) {
+        throw new Error(
+          `Failed to fetch pull request diff: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      }
+    }
+  }
+
+  // 安全にコマンドを実行するヘルパーメソッド
+  private async safeExec(command: string): Promise<string> {
+    try {
+      const { stdout } = await execPromise(command);
+      return stdout;
+    } catch (error) {
+      console.error(`コマンドが失敗しました: ${command}`, error);
+      return "";
+    }
   }
 
   /**
@@ -168,68 +405,254 @@ export class BacklogService {
     );
     console.log(`コメント長: ${content.length}文字`);
 
-    return this.callApi(
-      `/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/pullRequests/${pullRequestId}/comments`,
-      "post",
-      { content }
-    );
-  }
-
-  /**
-   * リポジトリをクローン
-   */
-  async cloneRepository(
-    projectKey: string,
-    repoName: string,
-    branch: string = "master"
-  ): Promise<string> {
-    const tempDir = path.join(__dirname, "../../temp");
-    const repoDir = path.join(
-      tempDir,
-      `${projectKey}_${repoName}_${Date.now()}`
-    );
-
     try {
-      // 一時ディレクトリが存在するか確認
-      if (!fs.existsSync(tempDir)) {
-        await mkdirPromise(tempDir, { recursive: true });
-        console.log(`一時ディレクトリを作成しました: ${tempDir}`);
-      }
+      // BacklogのAPIエンドポイントを構築
+      const url = `${this.baseUrl}/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/pullRequests/${pullRequestId}/comments`;
 
-      // リポジトリディレクトリを作成
-      await mkdirPromise(repoDir, { recursive: true });
-      console.log(`リポジトリディレクトリを作成しました: ${repoDir}`);
+      // APIキーをクエリパラメータとして追加
+      const params = {
+        apiKey: this.apiKey,
+      };
 
-      // Backlogのギットリポジトリへのアクセス情報
-      const gitUrl = `https://${this.spaceKey}.backlog.jp/git/${projectKey}/${repoName}.git`;
-      console.log(`リポジトリをクローン中: ${gitUrl} (${branch}ブランチ)`);
+      // フォームデータとしてコンテンツを送信
+      // APIの仕様に合わせて、contentパラメータのみを送信
+      const formData = new URLSearchParams();
+      formData.append("content", content);
 
-      // クローンコマンドを実行
-      const command = `git clone -b ${branch} --single-branch ${gitUrl} "${repoDir}"`;
-      await execPromise(command);
-      console.log(`クローン完了: ${repoDir}`);
+      // ヘッダーを設定
+      const config = {
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        params, // クエリパラメータとしてapiKeyを送信
+      };
 
-      return repoDir;
+      // リクエスト送信
+      const response = await axios.post(url, formData, config);
+      console.log(`コメント送信成功: PR #${pullRequestId}`);
+      return response.data;
     } catch (error) {
-      console.error(
-        `リポジトリクローンエラー (${projectKey}/${repoName}):`,
-        error
-      );
+      // エラー発生時の詳細ログ
+      if (axios.isAxiosError(error) && error.response) {
+        console.error(
+          `Backlog APIエラー [${error.response.status}]: ${JSON.stringify(
+            error.response.data
+          )}`
+        );
 
-      // エラー発生時は作成したディレクトリを削除
-      try {
-        if (fs.existsSync(repoDir)) {
-          await this.cleanupRepository(repoDir);
+        // もしコメントが長すぎる場合は分割して再送信を試みる
+        if (content.length > 10000 && error.response.status === 400) {
+          console.log("コメントが長すぎるため、分割して送信します");
+          return this.sendSplitComments(
+            projectIdOrKey,
+            repoIdOrName,
+            pullRequestId,
+            content
+          );
         }
-      } catch (cleanupError) {
-        console.error("クリーンアップ中にエラーが発生しました:", cleanupError);
+      } else {
+        console.error(`Backlog API通信エラー:`, error);
       }
 
       throw new Error(
-        `リポジトリのクローンに失敗しました: ${
-          error instanceof Error ? error.message : String(error)
+        `プルリクエストコメントの送信に失敗しました: ${
+          error instanceof Error ? error.message : "不明なエラー"
         }`
       );
+    }
+  }
+
+  /**
+   * コメントを分割して送信（コメントが長すぎる場合）
+   */
+  private async sendSplitComments(
+    projectIdOrKey: string,
+    repoIdOrName: string,
+    pullRequestId: number,
+    fullContent: string
+  ): Promise<any> {
+    try {
+      console.log(`コメントを分割して送信します: ${fullContent.length}文字`);
+
+      // 短い導入部分
+      const introComment =
+        "## AIコードレビュー結果\n\nコメントが長いため複数に分割して送信します。";
+
+      // 最大長（Backlogの制限よりやや短くする）
+      const MAX_LENGTH = 8000;
+
+      // コメントを分割
+      const parts = [];
+      let remainingContent = fullContent;
+
+      while (remainingContent.length > 0) {
+        if (parts.length === 0) {
+          // 最初のパートは導入部分を含める
+          const firstPartLength = MAX_LENGTH - introComment.length - 20;
+          let firstPart = remainingContent.substring(0, firstPartLength);
+
+          // マークダウンの構造を壊さないよう、段落や見出しの区切りで分割
+          const lastBreakPoint = Math.max(
+            firstPart.lastIndexOf("\n\n"),
+            firstPart.lastIndexOf("\n### "),
+            firstPart.lastIndexOf("\n## ")
+          );
+
+          if (lastBreakPoint > firstPartLength / 2) {
+            firstPart = remainingContent.substring(0, lastBreakPoint);
+          }
+
+          parts.push(
+            `${introComment}\n\n## パート 1/${Math.ceil(
+              fullContent.length / firstPartLength
+            )}\n\n${firstPart}`
+          );
+          remainingContent = remainingContent.substring(firstPart.length);
+        } else {
+          // 2つ目以降のパート
+          const partNumber: number = parts.length + 1;
+          let partContent = remainingContent.substring(0, MAX_LENGTH - 50);
+
+          // マークダウンの構造を壊さないよう分割
+          const lastBreakPoint = Math.max(
+            partContent.lastIndexOf("\n\n"),
+            partContent.lastIndexOf("\n### "),
+            partContent.lastIndexOf("\n## ")
+          );
+
+          if (lastBreakPoint > MAX_LENGTH / 2) {
+            partContent = remainingContent.substring(0, lastBreakPoint);
+          }
+
+          parts.push(
+            `## AIコードレビュー結果（続き）\n\n## パート ${partNumber}/${Math.ceil(
+              fullContent.length / MAX_LENGTH
+            )}\n\n${partContent}`
+          );
+          remainingContent = remainingContent.substring(partContent.length);
+        }
+      }
+
+      // 各パートを順番に送信
+      console.log(`${parts.length}パートに分割しました`);
+      let lastResponse = null;
+
+      for (let i = 0; i < parts.length; i++) {
+        console.log(`パート ${i + 1}/${parts.length} を送信中...`);
+
+        // APIキーをクエリパラメータとして追加
+        const url = `${this.baseUrl}/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/pullRequests/${pullRequestId}/comments`;
+
+        const params = {
+          apiKey: this.apiKey,
+        };
+
+        // フォームデータとしてコンテンツを送信
+        const formData = new URLSearchParams();
+        formData.append("content", parts[i]);
+
+        const config = {
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          params,
+        };
+
+        lastResponse = await axios.post(url, formData, config);
+
+        // APIレート制限に配慮して少し待機
+        if (i < parts.length - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+      }
+
+      console.log(`分割コメントの送信が完了しました`);
+      return lastResponse?.data;
+    } catch (error) {
+      console.error(`分割コメント送信中にエラーが発生しました:`, error);
+
+      // 最後の手段として、シンプルな通知だけを送信
+      try {
+        const fallbackContent =
+          "AIコードレビューが完了しました。詳細はアプリケーション内で確認してください。";
+
+        const url = `${this.baseUrl}/projects/${projectIdOrKey}/git/repositories/${repoIdOrName}/pullRequests/${pullRequestId}/comments`;
+        const params = { apiKey: this.apiKey };
+        const formData = new URLSearchParams();
+        formData.append("content", fallbackContent);
+
+        const response = await axios.post(url, formData, {
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          params,
+        });
+
+        console.log(`フォールバックコメントの送信に成功しました`);
+        return response.data;
+      } catch (fallbackError) {
+        console.error(
+          `フォールバックコメントの送信にも失敗しました:`,
+          fallbackError
+        );
+        throw new Error("プルリクエストコメントの送信に完全に失敗しました");
+      }
+    }
+  }
+
+  /**
+   * Backlogのリポジトリをクローン
+   */
+  // Update cloneRepository method to support shallow clones for efficiency
+  async cloneRepository(
+    projectIdOrKey: string,
+    repoIdOrName: string,
+    branch: string = "master",
+    shallow: boolean = false
+  ): Promise<string> {
+    const tempDir = path.join(__dirname, "../../temp");
+    const tempRepoDir = path.join(
+      tempDir,
+      `${projectIdOrKey}_${repoIdOrName}_${Date.now()}`
+    );
+
+    try {
+      // Create temp directory if it doesn't exist
+      await mkdirPromise(tempRepoDir, { recursive: true });
+
+      // Backlog git repository access info
+      const gitUrl = `${this.spaceKey}@${this.spaceKey}.git.backlog.jp:/${projectIdOrKey}/${repoIdOrName}.git`;
+      console.log(`SSH git URL を使用します: ${gitUrl}`);
+
+      // Clone command with optional shallow flag
+      const depthFlag = shallow ? "--depth 1" : "";
+      const command = `git clone ${depthFlag} -b ${branch} ${gitUrl} ${tempRepoDir}`;
+      console.log(`コマンドを実行します: ${command}`);
+      const { stdout, stderr } = await execPromise(command);
+
+      if (stderr && !stderr.includes("Cloning into")) {
+        console.warn(`クローン警告: ${stderr}`);
+      }
+
+      console.log(`リポジトリをクローンしました: ${tempRepoDir}`);
+
+      return tempRepoDir;
+    } catch (error) {
+      console.error("リポジトリのクローン中にエラーが発生しました:", error);
+
+      // Clean up on error
+      if (fs.existsSync(tempRepoDir)) {
+        try {
+          await rmdirPromise(tempRepoDir, { recursive: true });
+        } catch (rmError) {
+          console.error(
+            "一時ディレクトリのクリーンアップ中にエラーが発生しました:",
+            rmError
+          );
+        }
+      }
+
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      throw new Error(`リポジトリのクローンに失敗しました: ${errorMessage}`);
     }
   }
 

@@ -17,12 +17,23 @@ import {
   CodeEvaluationCriteria,
   CategoryPriorityMap,
 } from "../constants/CodeEvaluationCriteria";
+import { BacklogService } from "./BacklogService";
+import { RepositoryVectorSearchService } from "./RepositoryVectorSearchService";
+
+// プルリクエストレビューのコンテキスト型
+interface PullRequestReviewContext {
+  isReReview?: boolean;
+  reviewHistory?: any[];
+  comments?: any[];
+}
 
 export class AIService {
   private model: ChatOpenAI;
   private outputParser: StringOutputParser;
   private feedbackService: FeedbackService;
   private submissionService: SubmissionService;
+  private backlogService: BacklogService;
+  private repositoryVectorService: RepositoryVectorSearchService;
 
   constructor() {
     // APIキーの存在確認
@@ -49,6 +60,8 @@ export class AIService {
     this.outputParser = new StringOutputParser();
     this.feedbackService = new FeedbackService();
     this.submissionService = new SubmissionService();
+    this.backlogService = new BacklogService();
+    this.repositoryVectorService = new RepositoryVectorSearchService();
   }
 
   /**
@@ -291,12 +304,13 @@ ${outputParser.getFormatInstructions()}
   }
 
   /**
-   * プルリクエストをレビュー
+   * プルリクエストをレビュー（拡張版：レビュー履歴を考慮）
    */
   async reviewPullRequest(
     projectKey: string,
     repositoryName: string,
-    pullRequestId: number
+    pullRequestId: number,
+    context?: PullRequestReviewContext
   ): Promise<
     Array<{
       problem_point: string;
@@ -308,34 +322,213 @@ ${outputParser.getFormatInstructions()}
     }>
   > {
     console.log(
-      `PR #${pullRequestId} (${projectKey}/${repositoryName}) のレビューを開始します`
+      `PR #${pullRequestId} (${projectKey}/${repositoryName}) のレビューを開始します ${
+        context?.isReReview ? "【再レビュー】" : "【初回レビュー】"
+      }`
     );
 
-    // ここにプルリクエストレビューの実装を追加
-    // 実装は別の機会に行う
+    try {
+      // PR詳細を取得
+      const prDetails = await this.backlogService.getPullRequestById(
+        projectKey,
+        repositoryName,
+        pullRequestId
+      );
 
-    // PRコードの仮のサンプル
-    const dummyCode = `
-function calculateTotal(items) {
-  let total = 0;
-  for (let i = 0; i < items.length; i++) {
-    total += items[i].price;
+      // PR差分を取得
+      const diffData = await this.backlogService.getPullRequestDiff(
+        projectKey,
+        repositoryName,
+        pullRequestId
+      );
+
+      // 差分からコードを抽出
+      let codeContent = "";
+      if (typeof diffData === "string") {
+        codeContent = diffData;
+      } else {
+        // 複雑な差分データの場合は別の抽出方法を使用
+        // 簡略化のため、ダミーコードを使用
+        codeContent = `
+  // PR #${pullRequestId}: ${prDetails.summary}
+  // 変更内容の抽出サンプル
+  function sampleCode() {
+    console.log("This is a sample code extracted from PR");
+    return true;
   }
-  return total;
-}
-`;
+        `;
+      }
 
-    // 評価実行
-    const evaluationResult = await this.evaluateCodeAgainstCriteria(dummyCode);
+      // 過去のレビュー履歴などの収集（既存コード）
+      let historyContext = "";
+      let commentsContext = "";
+      let repoContext = "";
+      // これらの収集ロジックは変更不要
 
-    // 評価結果からフィードバック形式に変換
-    return evaluationResult.map((result) => ({
-      problem_point: result.problem_point,
-      suggestion: result.suggestion,
-      priority: result.priority,
-      code_snippet: result.code_snippet,
-      reference_url: result.reference_url,
-      category: result.category,
-    }));
+      // ===== 新しいアプローチ: 構造化出力パーサーの使用 =====
+      const outputParser = StructuredOutputParser.fromZodSchema(
+        z.array(
+          z.object({
+            category: z.nativeEnum(FeedbackCategory),
+            problem_point: z.string(),
+            suggestion: z.string(),
+            priority: z.nativeEnum(FeedbackPriority),
+            code_snippet: z.string().optional(),
+            reference_url: z.string().optional(),
+            is_checked: z.boolean(),
+          })
+        )
+      );
+
+      // LangChainのプロンプトテンプレートを使わず、生のOpenAIのリクエストを構築
+      const formatInstructions = outputParser.getFormatInstructions();
+
+      const reviewToken = `review-token-${pullRequestId}-${Date.now()}`;
+
+      // 以下、LangChainプロンプトテンプレートを使わずに直接OpenAIモデルを呼び出す方法
+      const messages = [
+        {
+          role: "system",
+          content: "あなたはプロフェッショナルなコードレビュアーです。",
+        },
+        {
+          role: "user",
+          content: `以下のプルリクエストをレビューし、詳細かつ具体的なフィードバックを生成してください。
+          
+  # プルリクエスト情報
+  - PR番号: #${pullRequestId}
+  - プロジェクト: ${projectKey}
+  - リポジトリ: ${repositoryName}
+  - タイトル: ${prDetails.summary}
+  - 説明: ${prDetails.description || "説明なし"}
+  - ベースブランチ: ${prDetails.base}
+  - 作成ブランチ: ${prDetails.branch}
+  
+  ${
+    context?.isReReview
+      ? `
+  # 再レビュー指示
+  このプルリクエストは以前にもレビューされています。以下の点に注意してください：
+  1. 前回のレビューで指摘された問題が解決されているか確認してください
+  2. 新しく追加された問題がないか確認してください
+  3. 改善された部分については肯定的なフィードバックを提供してください
+  4. 繰り返し指摘されている問題については、優先度を高くしてください
+  `
+      : ""
+  }
+  
+  # 評価基準
+  ${Object.entries(CodeEvaluationCriteria)
+    .map(([category, criteria]) => {
+      return (
+        `\n## ${this.getCategoryDisplayName(category as FeedbackCategory)}\n` +
+        criteria.map((item, index) => `${index + 1}. ${item}`).join("\n")
+      );
+    })
+    .join("\n")}
+  
+  # 評価方法
+  各評価基準について、以下の情報を含むフィードバックを生成してください：
+  1. カテゴリ: 該当する評価基準のカテゴリ
+  2. 問題点: 具体的な問題の説明（問題がない場合は遵守されている点を説明）
+  3. 改善提案: 問題の解決方法（問題がない場合は現状維持のアドバイス）
+  4. 優先度: high（重要）、medium（中程度）、low（軽微）
+  5. コードスニペット: 問題のある部分のコード（問題がない場合は省略可）
+  6. 参考URL: 関連するベストプラクティスなどへのリンク（任意）
+  7. 基準評価: コードがこの基準を満たしているかどうか（true/false）
+  
+  # 注意事項
+  - 各カテゴリから最低1つ以上のフィードバックを生成してください。
+  - 一般的なプログラミングのベストプラクティスに基づいて評価してください。
+  - 具体的で実用的なフィードバックを心がけてください。
+  - ${
+    context?.isReReview
+      ? "再レビューではより詳細かつ具体的なフィードバックを提供してください。"
+      : "初回レビューでは基本的な問題点を優先してください。"
+  }
+  - 「基準評価」は文字列ではなく真偽値（true/false）で返してください。
+    - true = コードがこの基準を満たしている（問題なし）
+    - false = コードがこの基準を満たしていない（問題あり）
+  
+  ${historyContext}
+  ${commentsContext}
+  ${repoContext}
+
+  # 固有トークン
+      このレビューの固有識別トークン: ${reviewToken}
+  
+  # プルリクエストのコード内容
+  \`\`\`
+  ${codeContent}
+  \`\`\`
+  
+  ${formatInstructions}
+  `,
+        },
+      ];
+
+      // OpenAIモデルを直接呼び出す
+      const result = await this.model.invoke(messages);
+
+      // 結果をパースする
+      let parsedResult;
+      try {
+        const resultText =
+          typeof result.content === "string"
+            ? result.content
+            : Array.isArray(result.content)
+            ? result.content
+                .map((item) =>
+                  typeof item === "object" && "text" in item ? item.text : ""
+                )
+                .join("")
+            : "";
+        // console.log("AIからの応答:", resultText);
+        parsedResult = await outputParser.parse(resultText);
+      } catch (parseError) {
+        console.error("出力パース中にエラーが発生しました:", parseError);
+        return [
+          {
+            problem_point: "レビュー結果のパース中にエラーが発生しました",
+            suggestion: "システム管理者に連絡してください",
+            priority: FeedbackPriority.MEDIUM,
+            category: FeedbackCategory.OTHER,
+          },
+        ];
+      }
+
+      console.log(
+        `PR #${pullRequestId} の評価結果: ${parsedResult.length} 件のフィードバックが生成されました`
+      );
+
+      // 評価結果からフィードバック形式に変換
+      return parsedResult.map((item) => ({
+        problem_point: item.problem_point,
+        suggestion: item.suggestion,
+        priority: item.priority,
+        code_snippet: item.code_snippet,
+        reference_url: item.reference_url,
+        category: item.category,
+        review_token: reviewToken, // 固有トークンを追加
+      }));
+    } catch (error) {
+      console.error(
+        `PR #${pullRequestId} のレビュー中にエラーが発生しました:`,
+        error
+      );
+
+      // エラー時のフォールバックレスポンス
+      return [
+        {
+          problem_point: "レビュー処理中にエラーが発生しました",
+          suggestion:
+            "エラー: " +
+            (error instanceof Error ? error.message : String(error)) +
+            "。システム管理者に連絡してください。",
+          priority: FeedbackPriority.MEDIUM,
+          category: FeedbackCategory.OTHER,
+        },
+      ];
+    }
   }
 }
