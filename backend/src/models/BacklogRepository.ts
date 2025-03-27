@@ -20,19 +20,29 @@ export class BacklogRepository {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column({ name: "project_key" })
+  @Column({ name: "project_key", type: "varchar", length: 50 })
   project_key: string;
 
-  @Column({ name: "project_name" })
+  @Column({ name: "project_name", type: "varchar", length: 255 })
   project_name: string;
 
-  @Column({ name: "repository_name" })
+  @Column({ name: "repository_name", type: "varchar", length: 255 })
   repository_name: string;
 
-  @Column({ name: "repository_id", nullable: true })
+  @Column({
+    name: "repository_id",
+    type: "varchar",
+    length: 100,
+    nullable: true,
+  })
   repository_id: string | null;
 
-  @Column({ name: "main_branch", default: "master" })
+  @Column({
+    name: "main_branch",
+    type: "varchar",
+    length: 100,
+    default: "master",
+  })
   main_branch: string;
 
   @Column({ name: "description", type: "text", nullable: true })
@@ -49,13 +59,18 @@ export class BacklogRepository {
   @Column({ name: "last_sync_at", type: "timestamp", nullable: true })
   last_sync_at: Date | null;
 
-  @Column({ name: "is_active", default: true })
+  @Column({ name: "is_active", type: "boolean", default: true })
   is_active: boolean;
 
   @Column({ name: "error_message", type: "text", nullable: true })
   error_message: string | null;
 
-  @Column({ name: "vectorstore_collection", nullable: true })
+  @Column({
+    name: "vectorstore_collection",
+    type: "varchar",
+    length: 255,
+    nullable: true,
+  })
   vectorstore_collection: string | null;
 
   @Column({ name: "last_vectorized_at", type: "timestamp", nullable: true })

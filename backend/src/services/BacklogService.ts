@@ -7,7 +7,6 @@ import { exec } from "child_process";
 import { AppDataSource } from "../index";
 import { Review } from "../models/Review";
 import { CodeSubmission, SubmissionStatus } from "../models/CodeSubmission";
-import { RepositoryVectorSearchService } from "./RepositoryVectorSearchService";
 import { BacklogRepository } from "../models/BacklogRepository";
 
 const execPromise = promisify(exec);
@@ -23,13 +22,11 @@ export class BacklogService {
   private submissionRepository = AppDataSource.getRepository(CodeSubmission);
   private backlogRepositoryRepository =
     AppDataSource.getRepository(BacklogRepository);
-  private repositoryVectorService: RepositoryVectorSearchService;
 
   constructor() {
     this.apiKey = process.env.BACKLOG_API_KEY || "";
     this.spaceKey = process.env.BACKLOG_SPACE || "";
     this.baseUrl = `https://${this.spaceKey}.backlog.jp/api/v2`;
-    this.repositoryVectorService = new RepositoryVectorSearchService();
 
     if (!this.apiKey || !this.spaceKey) {
       console.log(

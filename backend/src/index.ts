@@ -90,6 +90,23 @@ async function initializePullRequestMonitoring() {
     // プルリクエスト監視サービス初期化
     const monitoringService = new PullRequestMonitoringService();
 
+    try {
+      await AppDataSource.initialize();
+      console.log("Database connection established");
+
+      // マイグレーションの実行（必要に応じて）
+      try {
+        await AppDataSource.runMigrations();
+        console.log("Database migrations applied successfully");
+      } catch (migrationError) {
+        console.error("Migration error:", migrationError);
+        // マイグレーションエラーでもサーバーは起動する
+      }
+    } catch (dbError) {
+      console.error("Database connection error:", dbError);
+      // データベース接続エラーでもサーバーは起動（機能制限付き）
+    }
+
     // 既存プルリクエストのチェック
     console.log("Starting check of existing pull requests...");
     const result = await monitoringService.checkExistingPullRequests();

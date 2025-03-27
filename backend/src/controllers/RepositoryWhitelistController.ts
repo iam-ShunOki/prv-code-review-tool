@@ -67,7 +67,7 @@ export class RepositoryWhitelistController {
         const projectInfo = await this.backlogService
           .getProjects()
           .then((projects) =>
-            projects.find((p) => p.projectKey === validatedData.projectKey)
+            projects.find((p: any) => p.projectKey === validatedData.projectKey)
           );
 
         // リポジトリをデータベースに登録
