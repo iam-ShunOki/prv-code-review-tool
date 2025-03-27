@@ -5,15 +5,17 @@ import {
   Column,
   CreateDateColumn,
   UpdateDateColumn,
+  OneToMany,
 } from "typeorm";
+import { YearlyCriteriaSetting } from "./YearlyCriteriaSetting";
 
 @Entity("evaluation_criteria")
 export class EvaluationCriteria {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column({ unique: true, name: "criteria_key" }) // keyからcriteria_keyに変更
-  key: string; // プロパティ名はkeyのままでもOK（エンティティ内でのみの使用なので）
+  @Column({ unique: true, name: "criteria_key" })
+  key: string;
 
   @Column()
   name: string;
@@ -41,4 +43,8 @@ export class EvaluationCriteria {
 
   @UpdateDateColumn()
   updated_at: Date;
+
+  // 年度別設定との関連付け
+  @OneToMany(() => YearlyCriteriaSetting, (setting) => setting.criteria)
+  yearlySettings: YearlyCriteriaSetting[];
 }

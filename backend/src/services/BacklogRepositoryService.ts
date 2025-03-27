@@ -1,454 +1,406 @@
 // backend/src/services/BacklogRepositoryService.ts
-import * as fs from "fs";
-import * as path from "path";
-import { promisify } from "util";
-import { exec } from "child_process";
 import { AppDataSource } from "../index";
-import { BacklogService } from "./BacklogService";
-import { CodeEmbeddingService } from "./CodeEmbeddingService";
 import {
   BacklogRepository,
   RepositoryStatus,
 } from "../models/BacklogRepository";
-import { glob } from "glob";
-
-const execPromise = promisify(exec);
-const mkdirPromise = promisify(fs.mkdir);
-const unlinkPromise = promisify(fs.unlink);
-const rmdirPromise = promisify(fs.rmdir);
-const readFilePromise = promisify(fs.readFile);
+import { BacklogService } from "./BacklogService";
+import { RepositoryVectorSearchService } from "./RepositoryVectorSearchService";
 
 export class BacklogRepositoryService {
-  private repositoryRepository = AppDataSource.getRepository(BacklogRepository);
+  private backlogRepositoryRepository =
+    AppDataSource.getRepository(BacklogRepository);
   private backlogService: BacklogService;
-  private codeEmbeddingService: CodeEmbeddingService;
-  private tempDir: string;
+  private repositoryVectorService: RepositoryVectorSearchService;
 
   constructor() {
     this.backlogService = new BacklogService();
-    this.codeEmbeddingService = new CodeEmbeddingService();
-    this.tempDir = path.join(__dirname, "../../temp/repositories");
-    this.ensureTempDir();
+    this.repositoryVectorService = new RepositoryVectorSearchService();
   }
 
   /**
-   * 一時ディレクトリが存在することを確認
-   */
-  private async ensureTempDir(): Promise<void> {
-    if (!fs.existsSync(this.tempDir)) {
-      await mkdirPromise(this.tempDir, { recursive: true });
-    }
-  }
-
-  /**
-   * リポジトリを登録
-   */
-  async registerRepository(data: {
-    project_key: string;
-    project_name: string;
-    repository_name: string;
-    repository_id?: string;
-    description?: string;
-    main_branch?: string;
-  }): Promise<BacklogRepository> {
-    // 既存のリポジトリをチェック
-    const existingRepo = await this.repositoryRepository.findOne({
-      where: {
-        project_key: data.project_key,
-        repository_name: data.repository_name,
-      },
-    });
-
-    if (existingRepo) {
-      // 既に削除されていたリポジトリの場合は再有効化
-      if (!existingRepo.is_active) {
-        console.log(`Re-activating existing repository ${existingRepo.id}`);
-        existingRepo.is_active = true;
-        existingRepo.status = RepositoryStatus.REGISTERED;
-        existingRepo.error_message = "";
-        return this.repositoryRepository.save(existingRepo);
-      }
-      // アクティブなリポジトリの場合は更新
-      console.log(`Updating existing repository ${existingRepo.id}`);
-      existingRepo.project_name = data.project_name;
-      existingRepo.description = data.description || existingRepo.description;
-      existingRepo.main_branch = data.main_branch || existingRepo.main_branch;
-      existingRepo.repository_id =
-        data.repository_id || existingRepo.repository_id;
-
-      return this.repositoryRepository.save(existingRepo);
-    }
-
-    // 新しいリポジトリを作成
-    console.log(
-      `Creating new repository record for ${data.project_key}/${data.repository_name}`
-    );
-    const repository = this.repositoryRepository.create({
-      project_key: data.project_key,
-      project_name: data.project_name,
-      repository_name: data.repository_name,
-      repository_id: data.repository_id,
-      description: data.description,
-      main_branch: data.main_branch || "master",
-      status: RepositoryStatus.REGISTERED,
-      is_active: true,
-      vectorstore_collection:
-        `backlog_${data.project_key}_${data.repository_name}`.replace(
-          /[^a-zA-Z0-9_]/g,
-          "_"
-        ),
-    });
-
-    // リポジトリをデータベースに保存
-    const savedRepository = await this.repositoryRepository.save(repository);
-    console.log(`Repository saved with ID ${savedRepository.id}`);
-
-    // バックグラウンドでベクトル化処理を開始
-    setTimeout(() => {
-      console.log(
-        `Scheduling background vectorization for repository ${savedRepository.id}`
-      );
-      this.cloneAndVectorizeRepository(savedRepository.id)
-        .then(() =>
-          console.log(
-            `Background vectorization completed for repository ${savedRepository.id}`
-          )
-        )
-        .catch((error) =>
-          console.error(
-            `Background vectorization error for repository ${savedRepository.id}:`,
-            error
-          )
-        );
-    }, 2000);
-
-    return savedRepository;
-  }
-
-  /**
-   * バックグラウンドでベクトル化処理を開始
-   */
-  private async triggerBackgroundVectorization(
-    repositoryId: number
-  ): Promise<void> {
-    try {
-      console.log(
-        `Starting background vectorization for repository ${repositoryId}`
-      );
-
-      // 少し遅延を入れてシステムの負荷を分散
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-
-      // ベクトル化実行
-      await this.cloneAndVectorizeRepository(repositoryId);
-
-      console.log(
-        `Background vectorization completed for repository ${repositoryId}`
-      );
-    } catch (error) {
-      console.error(
-        `Background vectorization failed for repository ${repositoryId}:`,
-        error
-      );
-
-      // エラー情報をリポジトリに記録
-      try {
-        await this.updateRepository(repositoryId, {
-          status: RepositoryStatus.FAILED,
-          error_message: error instanceof Error ? error.message : String(error),
-        });
-      } catch (updateError) {
-        console.error(`Failed to update repository status:`, updateError);
-      }
-    }
-  }
-
-  /**
-   * 登録されたリポジトリ一覧を取得
-   */
-  async getRepositories(): Promise<BacklogRepository[]> {
-    return this.repositoryRepository.find({
-      where: { is_active: true },
-      order: { updated_at: "DESC" },
-    });
-  }
-
-  /**
-   * 特定のリポジトリ情報を取得
+   * リポジトリ情報を取得
    */
   async getRepositoryById(id: number): Promise<BacklogRepository | null> {
-    return this.repositoryRepository.findOne({
-      where: { id, is_active: true },
-    });
+    try {
+      console.log(`リポジトリ情報取得: ID ${id}`);
+
+      const repository = await this.backlogRepositoryRepository.findOneBy({
+        id,
+      });
+
+      if (!repository) {
+        console.log(`リポジトリID ${id} が見つかりません`);
+        return null;
+      }
+
+      return repository;
+    } catch (error) {
+      console.error(`リポジトリ情報取得エラー (ID ${id}):`, error);
+      throw error;
+    }
   }
 
   /**
-   * プロジェクトキーとリポジトリ名からリポジトリ情報を取得
+   * プロジェクトとリポジトリ名からリポジトリ情報を取得
    */
-  async getRepositoryByDetails(
+  async getRepositoryByProjectAndName(
     projectKey: string,
     repositoryName: string
   ): Promise<BacklogRepository | null> {
-    return this.repositoryRepository.findOne({
-      where: {
-        project_key: projectKey,
-        repository_name: repositoryName,
-        is_active: true,
-      },
-    });
+    try {
+      console.log(`リポジトリ情報取得: ${projectKey}/${repositoryName}`);
+
+      const repository = await this.backlogRepositoryRepository.findOne({
+        where: {
+          project_key: projectKey,
+          repository_name: repositoryName,
+          is_active: true,
+        },
+      });
+
+      if (!repository) {
+        console.log(
+          `リポジトリ ${projectKey}/${repositoryName} が見つかりません`
+        );
+        return null;
+      }
+
+      return repository;
+    } catch (error) {
+      console.error(
+        `リポジトリ情報取得エラー (${projectKey}/${repositoryName}):`,
+        error
+      );
+      throw error;
+    }
   }
 
   /**
-   * リポジトリ情報を更新
+   * リポジトリのステータスを更新
    */
-  async updateRepository(
-    id: number,
-    data: Partial<BacklogRepository>
-  ): Promise<BacklogRepository | null> {
-    await this.repositoryRepository.update(id, data);
-    return this.getRepositoryById(id);
+  async updateRepositoryStatus(
+    repositoryId: number,
+    status: RepositoryStatus,
+    errorMessage?: string
+  ): Promise<BacklogRepository> {
+    try {
+      console.log(
+        `リポジトリステータス更新: ID ${repositoryId}, ステータス ${status}`
+      );
+
+      const repository = await this.getRepositoryById(repositoryId);
+      if (!repository) {
+        throw new Error(`リポジトリID ${repositoryId} が見つかりません`);
+      }
+
+      // ステータスを更新
+      repository.status = status;
+
+      // エラーメッセージが指定されている場合は設定
+      if (errorMessage) {
+        repository.error_message = errorMessage;
+      }
+
+      // 更新して返却
+      const updatedRepository = await this.backlogRepositoryRepository.save(
+        repository
+      );
+
+      return updatedRepository;
+    } catch (error) {
+      console.error(
+        `リポジトリステータス更新エラー (ID ${repositoryId}):`,
+        error
+      );
+      throw error;
+    }
   }
 
   /**
-   * リポジトリを論理削除
+   * 登録済みリポジトリのリスト取得
+   */
+  async getActiveRepositories(): Promise<BacklogRepository[]> {
+    try {
+      console.log(`アクティブなリポジトリ一覧を取得`);
+
+      const repositories = await this.backlogRepositoryRepository.find({
+        where: { is_active: true },
+        order: { updated_at: "DESC" },
+      });
+
+      console.log(
+        `${repositories.length}件のアクティブリポジトリが見つかりました`
+      );
+
+      return repositories;
+    } catch (error) {
+      console.error(`アクティブリポジトリ一覧取得エラー:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * リポジトリを登録または更新
+   */
+  async registerRepository(
+    projectKey: string,
+    projectName: string,
+    repositoryName: string,
+    repositoryId: string | null = null,
+    mainBranch: string = "master"
+  ): Promise<BacklogRepository> {
+    try {
+      console.log(`リポジトリ登録/更新: ${projectKey}/${repositoryName}`);
+
+      // 既存リポジトリの確認
+      let repository = await this.getRepositoryByProjectAndName(
+        projectKey,
+        repositoryName
+      );
+
+      if (repository) {
+        // 既存リポジトリの更新
+        repository.project_name = projectName;
+        repository.repository_id = repositoryId;
+        repository.main_branch = mainBranch;
+        repository.is_active = true;
+
+        // 更新して返却
+        const updatedRepository = await this.backlogRepositoryRepository.save(
+          repository
+        );
+        console.log(`既存リポジトリを更新: ID ${updatedRepository.id}`);
+
+        return updatedRepository;
+      } else {
+        // 新規リポジトリの作成
+        const newRepositoryData = {
+          project_key: projectKey,
+          project_name: projectName,
+          repository_name: repositoryName,
+          repository_id: repositoryId,
+          main_branch: mainBranch,
+          status: RepositoryStatus.REGISTERED,
+          is_active: true,
+          vectorstore_collection:
+            `backlog_${projectKey}_${repositoryName}`.replace(
+              /[^a-zA-Z0-9_]/g,
+              "_"
+            ),
+        };
+
+        const newRepository =
+          this.backlogRepositoryRepository.create(newRepositoryData);
+        const savedRepository = await this.backlogRepositoryRepository.save(
+          newRepository
+        );
+
+        console.log(`新規リポジトリを登録: ID ${savedRepository.id}`);
+
+        return savedRepository;
+      }
+    } catch (error) {
+      console.error(
+        `リポジトリ登録/更新エラー (${projectKey}/${repositoryName}):`,
+        error
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * リポジトリを同期
+   */
+  async syncRepositories(): Promise<BacklogRepository[]> {
+    try {
+      console.log(`リポジトリ同期開始`);
+
+      // Backlogからプロジェクト一覧を取得
+      const projects = await this.backlogService.getProjects();
+
+      const updatedRepositories: BacklogRepository[] = [];
+
+      // 各プロジェクトのリポジトリを処理
+      for (const project of projects) {
+        try {
+          // プロジェクトのリポジトリ一覧を取得
+          const repositories = await this.backlogService.getRepositories(
+            project.projectKey
+          );
+
+          for (const repo of repositories) {
+            try {
+              // リポジトリを登録または更新
+              const updatedRepo = await this.registerRepository(
+                project.projectKey,
+                project.name,
+                repo.name,
+                repo.id.toString(),
+                repo.defaultBranch || "master"
+              );
+
+              updatedRepositories.push(updatedRepo);
+            } catch (repoError) {
+              console.error(
+                `リポジトリ登録エラー (${project.projectKey}/${repo.name}):`,
+                repoError
+              );
+
+              // エラー情報を保存
+              const errorMessage =
+                repoError instanceof Error
+                  ? repoError.message
+                  : String(repoError);
+
+              // 既存リポジトリの確認
+              const existingRepo = await this.getRepositoryByProjectAndName(
+                project.projectKey,
+                repo.name
+              );
+
+              if (existingRepo) {
+                // エラー情報を更新
+                await this.updateRepositoryStatus(
+                  existingRepo.id,
+                  RepositoryStatus.FAILED,
+                  errorMessage
+                );
+              }
+            }
+          }
+        } catch (projectError) {
+          console.error(
+            `プロジェクト処理エラー (${project.projectKey}):`,
+            projectError
+          );
+        }
+      }
+
+      console.log(`${updatedRepositories.length}件のリポジトリを同期しました`);
+
+      return updatedRepositories;
+    } catch (error) {
+      console.error(`リポジトリ同期エラー:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * リポジトリを削除（論理削除）
    */
   async deleteRepository(id: number): Promise<boolean> {
-    const repository = await this.getRepositoryById(id);
-    if (!repository) {
+    try {
+      console.log(`リポジトリ削除: ID ${id}`);
+
+      const repository = await this.getRepositoryById(id);
+      if (!repository) {
+        throw new Error(`リポジトリID ${id} が見つかりません`);
+      }
+
+      // 論理削除（非アクティブに設定）
+      repository.is_active = false;
+
+      await this.backlogRepositoryRepository.save(repository);
+
+      console.log(`リポジトリを削除しました: ID ${id}`);
+
+      return true;
+    } catch (error) {
+      console.error(`リポジトリ削除エラー (ID ${id}):`, error);
       return false;
     }
-
-    // 論理削除のみ実行（物理削除はしない）
-    repository.is_active = false;
-    await this.repositoryRepository.save(repository);
-    return true;
   }
 
   /**
-   * リポジトリのクローンとベクトル化を実行
+   * リポジトリの自動ベクトル化処理
    */
-  async cloneAndVectorizeRepository(id: number): Promise<BacklogRepository> {
-    const repository = await this.getRepositoryById(id);
-    if (!repository) {
-      throw new Error("リポジトリが見つかりません");
-    }
-
-    let tempRepoDir = "";
-
+  async vectorizeRepositories(limit: number = 5): Promise<BacklogRepository[]> {
     try {
-      // ステータスを更新
-      await this.updateRepository(id, { status: RepositoryStatus.CLONED });
+      console.log(`リポジトリの自動ベクトル化処理開始（上限 ${limit}件）`);
 
-      // リポジトリをクローン
-      tempRepoDir = await this.cloneRepository(
-        repository.project_key,
-        repository.repository_name,
-        repository.main_branch
-      );
-
-      // ベクトル化対象のファイルパスを取得
-      const filePaths = await this.getCodeFilePaths(tempRepoDir);
-
-      if (filePaths.length === 0) {
-        throw new Error("ベクトル化対象のコードファイルが見つかりません");
-      }
-
-      // コードファイルをベクトル化
-      await this.vectorizeFiles(
-        repository.vectorstore_collection,
-        tempRepoDir,
-        filePaths
-      );
-
-      // 正常にベクトル化が完了した場合、ステータスを更新
-      await this.updateRepository(id, {
-        status: RepositoryStatus.VECTORIZED,
-        last_sync_at: new Date(),
-        error_message: "",
+      // ベクトル化対象のリポジトリを取得
+      const repositories = await this.backlogRepositoryRepository.find({
+        where: {
+          is_active: true,
+          status: RepositoryStatus.REGISTERED,
+        },
+        order: { created_at: "ASC" },
+        take: limit,
       });
 
-      return (await this.getRepositoryById(id)) as BacklogRepository;
-    } catch (error) {
-      console.error(`リポジトリ処理エラー (ID: ${id}):`, error);
+      console.log(
+        `${repositories.length}件のベクトル化対象リポジトリが見つかりました`
+      );
 
-      // エラー情報を記録
-      await this.updateRepository(id, {
-        status: RepositoryStatus.FAILED,
-        error_message: error instanceof Error ? error.message : "Unknown error",
-      });
+      const vectorizedRepositories: BacklogRepository[] = [];
 
-      throw error;
-    } finally {
-      // 一時ディレクトリの削除
-      await this.cleanupTempDir(tempRepoDir);
-    }
-  }
+      // 各リポジトリのベクトル化を実行
+      for (const repository of repositories) {
+        try {
+          console.log(
+            `リポジトリのベクトル化開始: ${repository.project_key}/${repository.repository_name}`
+          );
 
-  /**
-   * リポジトリをクローン
-   */
-  private async cloneRepository(
-    projectKey: string,
-    repoName: string,
-    branch: string = "master"
-  ): Promise<string> {
-    const tempRepoDir = path.join(
-      this.tempDir,
-      `${projectKey}_${repoName}_${Date.now()}`
-    );
+          // ステータスをクローン中に更新
+          await this.updateRepositoryStatus(
+            repository.id,
+            RepositoryStatus.CLONED
+          );
 
-    try {
-      // 一時ディレクトリを作成
-      await mkdirPromise(tempRepoDir, { recursive: true });
+          // ベクトル化処理
+          const collectionName =
+            await this.repositoryVectorService.vectorizeRepository(
+              repository.project_key,
+              repository.repository_name,
+              repository.main_branch
+            );
 
-      // Backlogのギットリポジトリへのアクセス情報を取得
-      const spaceKey = process.env.BACKLOG_SPACE || "";
-      const apiKey = process.env.BACKLOG_API_KEY || "";
+          // ベクトル化成功時の更新
+          const updatedRepo = await this.backlogRepositoryRepository.findOneBy({
+            id: repository.id,
+          });
+          if (updatedRepo) {
+            updatedRepo.status = RepositoryStatus.VECTORIZED;
+            updatedRepo.vectorstore_collection = collectionName;
+            updatedRepo.last_vectorized_at = new Date();
+            updatedRepo.error_message = null;
 
-      // アクセス情報で認証用URLを構築
-      // const gitUrl = `https://${spaceKey}.backlog.jp/git/${projectKey}/${repoName}.git`;
-      const gitUrl = `${spaceKey}@${spaceKey}.git.backlog.jp:/${projectKey}/${repoName}.git`;
+            const savedRepo = await this.backlogRepositoryRepository.save(
+              updatedRepo
+            );
+            vectorizedRepositories.push(savedRepo);
 
-      // クローンコマンドを実行
-      const command = `git clone -b ${branch} ${gitUrl} ${tempRepoDir}`;
-      await execPromise(command);
-
-      return tempRepoDir;
-    } catch (error) {
-      // エラーが発生した場合、作成した一時ディレクトリを削除
-      if (fs.existsSync(tempRepoDir)) {
-        await rmdirPromise(tempRepoDir, { recursive: true });
-      }
-      throw error;
-    }
-  }
-
-  /**
-   * ベクトル化対象のコードファイルパスを取得
-   */
-  private async getCodeFilePaths(repoDir: string): Promise<string[]> {
-    // サポートするコード拡張子
-    const extensions = [
-      // プログラミング言語
-      "js",
-      "ts",
-      "jsx",
-      "tsx",
-      "py",
-      "java",
-      "rb",
-      "php",
-      "c",
-      "cpp",
-      "cs",
-      "go",
-      "rs",
-      "swift",
-      "kt",
-      "scala",
-      "sh",
-      "bash",
-      "pl",
-      "r",
-      "sql",
-      "html",
-      "css",
-      "scss",
-      "sass",
-      "less",
-      // 設定ファイル
-      "json",
-      "yaml",
-      "yml",
-      "xml",
-      "toml",
-      "ini",
-      "conf",
-      "config",
-      // 文書ファイル
-      "md",
-      "markdown",
-      "txt",
-    ];
-
-    // 除外するパターン
-    const excludeDirs = [
-      "**/node_modules/**",
-      "**/venv/**",
-      "**/.git/**",
-      "**/build/**",
-      "**/dist/**",
-      "**/target/**",
-    ];
-
-    // ファイルのグロブパターンを構築
-    const pattern = `**/*.@(${extensions.join("|")})`;
-
-    // ファイルパスを取得（glob v10以降はネイティブにPromiseをサポート）
-    const files = await glob(pattern, {
-      cwd: repoDir,
-      ignore: excludeDirs,
-      absolute: true,
-    });
-
-    return files;
-  }
-
-  /**
-   * ファイルをベクトル化
-   */
-  private async vectorizeFiles(
-    collectionName: string,
-    repoDir: string,
-    filePaths: string[]
-  ): Promise<void> {
-    // テキストファイルのみを処理対象とする
-    const textFiles = filePaths.filter((filePath) => {
-      const stats = fs.statSync(filePath);
-      // 50MBを超えるファイルは除外
-      return stats.isFile() && stats.size < 50 * 1024 * 1024;
-    });
-
-    // 各ファイルをベクトル化
-    for (const filePath of textFiles) {
-      try {
-        // ファイルの内容を読み込む
-        const content = await readFilePromise(filePath, "utf-8");
-
-        // 相対パスを取得（メタデータとして保存）
-        const relativePath = path.relative(repoDir, filePath);
-
-        // ファイルの拡張子を取得
-        const extension = path.extname(filePath).substring(1);
-
-        // ベクトル化を実行
-        await this.codeEmbeddingService.createEmbeddingFromCode(
-          content,
-          collectionName,
-          {
-            filePath: relativePath,
-            fileType: extension,
-            repoDir: path.basename(repoDir),
+            console.log(
+              `リポジトリのベクトル化完了: ${repository.project_key}/${repository.repository_name}`
+            );
           }
-        );
-      } catch (error) {
-        console.error(`ファイルのベクトル化エラー (${filePath}):`, error);
-        // エラーがあっても処理を続行
-      }
-    }
-  }
+        } catch (error) {
+          console.error(
+            `リポジトリのベクトル化エラー (ID ${repository.id}):`,
+            error
+          );
 
-  /**
-   * 一時ディレクトリを削除
-   */
-  private async cleanupTempDir(dirPath: string): Promise<void> {
-    if (dirPath && fs.existsSync(dirPath)) {
-      try {
-        await rmdirPromise(dirPath, { recursive: true });
-        console.log(`一時ディレクトリを削除しました: ${dirPath}`);
-      } catch (error) {
-        console.error(`一時ディレクトリの削除エラー (${dirPath}):`, error);
+          // エラー情報を更新
+          const errorMessage =
+            error instanceof Error ? error.message : String(error);
+
+          await this.updateRepositoryStatus(
+            repository.id,
+            RepositoryStatus.FAILED,
+            errorMessage
+          );
+        }
       }
+
+      console.log(
+        `${vectorizedRepositories.length}件のリポジトリをベクトル化しました`
+      );
+
+      return vectorizedRepositories;
+    } catch (error) {
+      console.error(`リポジトリベクトル化処理エラー:`, error);
+      throw error;
     }
   }
 }

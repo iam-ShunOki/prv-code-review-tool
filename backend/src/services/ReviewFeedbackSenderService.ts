@@ -2,10 +2,15 @@
 import { AppDataSource } from "../index";
 import { Review, ReviewStatus } from "../models/Review";
 import { CodeSubmission, SubmissionStatus } from "../models/CodeSubmission";
-import { Feedback, FeedbackPriority } from "../models/Feedback";
+import {
+  Feedback,
+  FeedbackPriority,
+  FeedbackCategory,
+} from "../models/Feedback";
 import { BacklogService } from "./BacklogService";
 import { Not, IsNull, LessThan, Repository } from "typeorm";
 import { RepositoryWhitelistService } from "./RepositoryWhitelistService";
+import { FeedbackService } from "./FeedbackService";
 
 export class ReviewFeedbackSenderService {
   private reviewRepository: Repository<Review>;
@@ -13,6 +18,7 @@ export class ReviewFeedbackSenderService {
   private feedbackRepository: Repository<Feedback>;
   private backlogService: BacklogService;
   private repositoryWhitelistService: RepositoryWhitelistService;
+  private feedbackService: FeedbackService;
 
   constructor() {
     this.reviewRepository = AppDataSource.getRepository(Review);
@@ -20,6 +26,7 @@ export class ReviewFeedbackSenderService {
     this.feedbackRepository = AppDataSource.getRepository(Feedback);
     this.backlogService = new BacklogService();
     this.repositoryWhitelistService = RepositoryWhitelistService.getInstance();
+    this.feedbackService = new FeedbackService();
   }
 
   /**
@@ -31,7 +38,7 @@ export class ReviewFeedbackSenderService {
   ): Promise<boolean> {
     try {
       console.log(
-        `Attempting to send feedback for review #${reviewId} to Backlog`
+        `レビュー #${reviewId} のフィードバックをBacklogに送信します`
       );
 
       // レビューを取得
@@ -40,7 +47,7 @@ export class ReviewFeedbackSenderService {
       });
 
       if (!review) {
-        console.log(`Review #${reviewId} not found`);
+        console.log(`レビュー #${reviewId} が見つかりません`);
         return false;
       }
 
@@ -50,18 +57,20 @@ export class ReviewFeedbackSenderService {
         !review.backlog_project ||
         !review.backlog_repository
       ) {
-        console.log(`Review #${reviewId} is not associated with a Backlog PR`);
+        console.log(
+          `レビュー #${reviewId} はBacklog PRと関連付けられていません`
+        );
         return false;
       }
 
       console.log(
-        `Review #${reviewId} is associated with PR #${review.backlog_pr_id} in ${review.backlog_project}/${review.backlog_repository}`
+        `レビュー #${reviewId} は PR #${review.backlog_pr_id} (${review.backlog_project}/${review.backlog_repository}) に関連付けられています`
       );
 
       // ホワイトリストチェック（強制返信フラグがなければ）
       if (!forceReply) {
         console.log(
-          `Checking whitelist for ${review.backlog_project}/${review.backlog_repository}`
+          `${review.backlog_project}/${review.backlog_repository} のホワイトリストを確認します`
         );
         const isAllowed =
           await this.repositoryWhitelistService.isAutoReplyAllowed(
@@ -71,7 +80,7 @@ export class ReviewFeedbackSenderService {
 
         if (!isAllowed) {
           console.log(
-            `Auto-reply not allowed for ${review.backlog_project}/${review.backlog_repository}`
+            `${review.backlog_project}/${review.backlog_repository} は自動返信が許可されていません`
           );
           return false;
         }
@@ -84,19 +93,19 @@ export class ReviewFeedbackSenderService {
       });
 
       if (!submissions || submissions.length === 0) {
-        console.log(`No submissions found for review #${reviewId}`);
+        console.log(`レビュー #${reviewId} にコード提出が見つかりません`);
         return false;
       }
 
       const latestSubmission = submissions[0];
       console.log(
-        `Using latest submission #${latestSubmission.id} (version ${latestSubmission.version})`
+        `最新のコード提出 #${latestSubmission.id} (バージョン ${latestSubmission.version}) を使用します`
       );
 
       // レビュー済みか確認
       if (latestSubmission.status !== SubmissionStatus.REVIEWED) {
         console.log(
-          `Submission #${latestSubmission.id} is not reviewed yet (status: ${latestSubmission.status})`
+          `コード提出 #${latestSubmission.id} はまだレビューされていません (ステータス: ${latestSubmission.status})`
         );
         return false;
       }
@@ -108,19 +117,30 @@ export class ReviewFeedbackSenderService {
       });
 
       console.log(
-        `Found ${feedbacks.length} feedbacks for submission #${latestSubmission.id}`
+        `コード提出 #${latestSubmission.id} に対して ${feedbacks.length} 件のフィードバックが見つかりました`
+      );
+
+      // チェックリスト完了率を取得
+      const checklistRate = await this.feedbackService.getChecklistRate(
+        latestSubmission.id
+      );
+      console.log(
+        `チェックリスト完了率: ${checklistRate.rate.toFixed(2)}% (${
+          checklistRate.checked
+        }/${checklistRate.total})`
       );
 
       // フィードバックをフォーマット
       const formattedFeedback = this.formatFeedbacksAsMarkdown(
         feedbacks,
         review,
-        latestSubmission
+        latestSubmission,
+        checklistRate
       );
 
       // Backlogにコメントを送信
       try {
-        console.log(`Sending feedback to PR #${review.backlog_pr_id}`);
+        console.log(`PR #${review.backlog_pr_id} にフィードバックを送信します`);
         await this.backlogService.addPullRequestComment(
           review.backlog_project,
           review.backlog_repository,
@@ -129,17 +149,23 @@ export class ReviewFeedbackSenderService {
         );
 
         console.log(
-          `Successfully sent feedback to PR #${review.backlog_pr_id}`
+          `PR #${review.backlog_pr_id} へのフィードバック送信に成功しました`
         );
 
-        // レビューステータスを完了に更新
-        await this.reviewRepository.update(reviewId, {
-          status: ReviewStatus.COMPLETED,
-        });
+        // 全てのフィードバックがチェック済みの場合はレビューステータスを完了に更新
+        if (checklistRate.rate === 100) {
+          await this.reviewRepository.update(reviewId, {
+            status: ReviewStatus.COMPLETED,
+          });
+          console.log(`レビュー #${reviewId} のステータスを完了に更新しました`);
+        }
 
         return true;
       } catch (apiError) {
-        console.error(`Error sending comment to Backlog:`, apiError);
+        console.error(
+          `Backlogへのコメント送信中にエラーが発生しました:`,
+          apiError
+        );
 
         // コメントが長すぎる場合は分割して送信を試みる
         if (formattedFeedback.length > 10000) {
@@ -156,7 +182,7 @@ export class ReviewFeedbackSenderService {
       }
     } catch (error) {
       console.error(
-        `Error sending review feedback for review #${reviewId}:`,
+        `レビュー #${reviewId} のフィードバック送信中にエラーが発生しました:`,
         error
       );
       return false;
@@ -171,7 +197,7 @@ export class ReviewFeedbackSenderService {
     failed: number;
     skipped: number;
   }> {
-    console.log("Checking for pending review feedbacks to send to Backlog");
+    console.log("送信待ちのレビューフィードバックを確認しています");
     let success = 0;
     let failed = 0;
     let skipped = 0;
@@ -187,7 +213,9 @@ export class ReviewFeedbackSenderService {
         },
       });
 
-      console.log(`Found ${pendingReviews.length} pending reviews`);
+      console.log(
+        `送信待ちのレビューが ${pendingReviews.length} 件見つかりました`
+      );
 
       for (const review of pendingReviews) {
         try {
@@ -200,7 +228,7 @@ export class ReviewFeedbackSenderService {
           // レビュー済みかチェック
           if (latestSubmission?.status === SubmissionStatus.REVIEWED) {
             console.log(
-              `Review #${review.id} has reviewed submission, sending feedback`
+              `レビュー #${review.id} にはレビュー済みのコード提出があります。フィードバックを送信します`
             );
 
             // ホワイトリスト確認
@@ -212,7 +240,7 @@ export class ReviewFeedbackSenderService {
 
             if (!isAllowed) {
               console.log(
-                `Auto-reply not allowed for ${review.backlog_project}/${review.backlog_repository}`
+                `${review.backlog_project}/${review.backlog_repository} は自動返信が許可されていません`
               );
               skipped++;
               continue;
@@ -230,19 +258,25 @@ export class ReviewFeedbackSenderService {
             }
           } else {
             console.log(
-              `Review #${review.id} has no reviewed submission yet, skipping`
+              `レビュー #${review.id} にはレビュー済みのコード提出がありません。スキップします`
             );
             skipped++;
           }
         } catch (reviewError) {
-          console.error(`Error processing review #${review.id}:`, reviewError);
+          console.error(
+            `レビュー #${review.id} の処理中にエラーが発生しました:`,
+            reviewError
+          );
           failed++;
         }
       }
 
       return { success, failed, skipped };
     } catch (error) {
-      console.error("Error sending pending review feedbacks:", error);
+      console.error(
+        "送信待ちレビューフィードバックの処理中にエラーが発生しました:",
+        error
+      );
       return { success, failed, skipped };
     }
   }
@@ -259,7 +293,7 @@ export class ReviewFeedbackSenderService {
   ): Promise<boolean> {
     try {
       console.log(
-        `Splitting feedback for PR #${pullRequestId} (${feedback.length} chars)`
+        `PR #${pullRequestId} へのフィードバック (${feedback.length} 文字) を分割して送信します`
       );
 
       // 最大コメント長
@@ -329,7 +363,7 @@ export class ReviewFeedbackSenderService {
       return true;
     } catch (error) {
       console.error(
-        `Error sending split feedback for PR #${pullRequestId}:`,
+        `PR #${pullRequestId} への分割フィードバック送信中にエラーが発生しました:`,
         error
       );
       return false;
@@ -342,14 +376,20 @@ export class ReviewFeedbackSenderService {
   private formatFeedbacksAsMarkdown(
     feedbacks: Feedback[],
     review: Review,
-    submission: CodeSubmission
+    submission: CodeSubmission,
+    checklistRate: { total: number; checked: number; rate: number }
   ): string {
-    let markdown = "## AIコードレビュー結果\n\n";
+    let markdown = "## AIコードレビュー結果（チェックリスト形式）\n\n";
 
     // レビュー情報を追加（簡潔に）
     markdown += `### レビュー情報\n`;
     markdown += `- PR: #${review.backlog_pr_id}\n`;
-    markdown += `- レビュー日時: ${new Date().toLocaleString("ja-JP")}\n\n`;
+    markdown += `- レビュー日時: ${new Date().toLocaleString("ja-JP")}\n`;
+
+    // チェックリストの進捗状況を追加
+    markdown += `- チェックリスト進捗: ${checklistRate.checked}/${
+      checklistRate.total
+    } 項目 (${checklistRate.rate.toFixed(1)}%)\n\n`;
 
     // フィードバックがなければその旨を表示
     if (!feedbacks || feedbacks.length === 0) {
@@ -359,77 +399,125 @@ export class ReviewFeedbackSenderService {
       return markdown;
     }
 
-    // 優先度ごとにフィードバックを分類
-    const highPriority = feedbacks.filter(
-      (f) => f.priority === FeedbackPriority.HIGH
-    );
-    const mediumPriority = feedbacks.filter(
-      (f) => f.priority === FeedbackPriority.MEDIUM
-    );
-    const lowPriority = feedbacks.filter(
-      (f) => f.priority === FeedbackPriority.LOW
-    );
+    // カテゴリごとにフィードバックを分類
+    const categorizedFeedbacks: Record<string, Feedback[]> = {};
+
+    // 未分類のフィードバックを格納するためのカテゴリ
+    categorizedFeedbacks["未分類"] = [];
+
+    // フィードバックをカテゴリごとに整理
+    feedbacks.forEach((feedback) => {
+      const categoryKey = feedback.category || "未分類";
+      const categoryName = this.getCategoryDisplayName(categoryKey);
+
+      if (!categorizedFeedbacks[categoryName]) {
+        categorizedFeedbacks[categoryName] = [];
+      }
+
+      categorizedFeedbacks[categoryName].push(feedback);
+    });
 
     // サマリーセクション
     markdown += "### サマリー\n\n";
-    markdown += `- 高優先度の問題: ${highPriority.length}件\n`;
-    markdown += `- 中優先度の問題: ${mediumPriority.length}件\n`;
-    markdown += `- 低優先度の問題: ${lowPriority.length}件\n`;
-    markdown += `- 合計: ${feedbacks.length}件\n\n`;
+    markdown += `- 合計レビュー項目: ${feedbacks.length}件\n`;
+    Object.entries(categorizedFeedbacks).forEach(([category, items]) => {
+      if (items.length > 0) {
+        markdown += `- ${category}: ${items.length}件\n`;
+      }
+    });
+    markdown += "\n";
 
-    // 高優先度のフィードバック - 絵文字を使わない
-    if (highPriority.length > 0) {
-      markdown += "### [重要] 高優先度の問題\n\n";
-      highPriority.forEach((feedback, index) => {
-        markdown += this.formatSingleFeedback(feedback, index + 1);
-      });
+    // チェックリスト進捗状況をビジュアル表示
+    if (checklistRate.total > 0) {
+      markdown += "### チェックリスト進捗\n\n";
+
+      // プログレスバーの作成
+      const barLength = 20;
+      const filledLength = Math.round((checklistRate.rate / 100) * barLength);
+      const emptyLength = barLength - filledLength;
+
+      const progressBar = "■".repeat(filledLength) + "□".repeat(emptyLength);
+
+      markdown += `${progressBar} ${checklistRate.rate.toFixed(1)}%\n\n`;
+
+      // 完了率に応じてメッセージを変更
+      if (checklistRate.rate === 100) {
+        markdown += "**✅ すべてのチェックが完了しました！**\n\n";
+      } else if (checklistRate.rate > 75) {
+        markdown += "**⏳ もう少しでチェックが完了します！**\n\n";
+      } else if (checklistRate.rate > 50) {
+        markdown += "**🔄 チェックが進行中です。**\n\n";
+      } else {
+        markdown += "**🚀 チェックを開始しましょう！**\n\n";
+      }
     }
 
-    // 中優先度のフィードバック - 絵文字を使わない
-    if (mediumPriority.length > 0) {
-      markdown += "### [注意] 中優先度の問題\n\n";
-      mediumPriority.forEach((feedback, index) => {
-        markdown += this.formatSingleFeedback(feedback, index + 1);
-      });
-    }
+    // カテゴリごとにチェックリスト形式でフィードバックを表示
+    Object.entries(categorizedFeedbacks).forEach(
+      ([category, categoryFeedbacks]) => {
+        if (categoryFeedbacks.length === 0) return;
 
-    // 低優先度のフィードバック - 絵文字を使わない
-    if (lowPriority.length > 0) {
-      markdown += "### [改善] 低優先度の問題\n\n";
-      lowPriority.forEach((feedback, index) => {
-        markdown += this.formatSingleFeedback(feedback, index + 1);
-      });
-    }
+        markdown += `### ${category}のチェックリスト\n\n`;
+
+        categoryFeedbacks.forEach((feedback, index) => {
+          const checkStatus = feedback.is_checked ? "[x]" : "[ ]";
+          markdown += `${checkStatus} **${index + 1}. ${
+            feedback.problem_point
+          }**\n\n`;
+
+          // コードスニペットがある場合は表示
+          if (feedback.code_snippet) {
+            markdown += `\`\`\`\n${feedback.code_snippet}\n\`\`\`\n\n`;
+          }
+
+          markdown += `   **提案**: ${feedback.suggestion}\n\n`;
+
+          // 参考リソースがある場合は表示
+          if (feedback.reference_url) {
+            markdown += `   **参考**: [詳細情報](${feedback.reference_url})\n\n`;
+          }
+
+          // チェック状態を表示
+          if (feedback.is_checked) {
+            markdown += `   **✅ 確認済み**`;
+            if (feedback.checked_at) {
+              const checkedDate = new Date(feedback.checked_at);
+              markdown += ` (${checkedDate.toLocaleString("ja-JP")})\n\n`;
+            } else {
+              markdown += `\n\n`;
+            }
+          }
+
+          markdown += "\n";
+        });
+      }
+    );
 
     // フッター
-    markdown += "\n---\n";
-    markdown += "このレビューはAIによって自動生成されました。";
+    markdown += "---\n";
+    markdown +=
+      "このレビューはAIによって自動生成されました。チェックリストの各項目を確認し、問題が解決したら✅をつけてください。";
 
     return markdown;
   }
 
   /**
-   * 単一のフィードバックをマークダウン形式で整形
-   * line_numberへの参照を削除
+   * フィードバックカテゴリの表示名を取得
    */
-  /**
-   * 単一のフィードバックをマークダウン形式で整形
-   */
-  private formatSingleFeedback(feedback: Feedback, index: number): string {
-    let result = `#### ${index}. ${feedback.problem_point}\n\n`;
+  private getCategoryDisplayName(category: string): string {
+    const categoryMap: Record<string, string> = {
+      code_quality: "コード品質",
+      security: "セキュリティ",
+      performance: "パフォーマンス",
+      best_practice: "ベストプラクティス",
+      readability: "可読性",
+      functionality: "機能性",
+      maintainability: "保守性",
+      architecture: "アーキテクチャ",
+      other: "その他",
+      未分類: "未分類",
+    };
 
-    // 参考リソースがある場合は表示
-    if (feedback.reference_url) {
-      result += `**参考リソース**: [詳細情報](${feedback.reference_url})\n\n`;
-    }
-
-    // コードスニペットがある場合は表示
-    if (feedback.code_snippet) {
-      result += `**問題のあるコード**:\n\n\`\`\`\n${feedback.code_snippet}\n\`\`\`\n\n`;
-    }
-
-    result += `**提案**: ${feedback.suggestion}\n\n`;
-
-    return result;
+    return categoryMap[category] || category;
   }
 }

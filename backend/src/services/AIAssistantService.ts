@@ -5,6 +5,8 @@ import { PromptTemplate } from "@langchain/core/prompts";
 import { ReviewService } from "./ReviewService";
 import { SubmissionService } from "./SubmissionService";
 import { FeedbackService } from "./FeedbackService";
+import { BacklogService } from "./BacklogService";
+import { RepositoryVectorSearchService } from "./RepositoryVectorSearchService";
 
 export class AIAssistantService {
   private model: ChatOpenAI;
@@ -13,18 +15,18 @@ export class AIAssistantService {
   private reviewService: ReviewService;
   private submissionService: SubmissionService;
   private feedbackService: FeedbackService;
+  private backlogService: BacklogService;
+  private repositoryVectorService: RepositoryVectorSearchService;
 
   constructor() {
     // APIキーの存在確認
     if (!process.env.OPENAI_API_KEY) {
-      console.warn(
-        "WARNING: OPENAI_API_KEY is not set in environment variables"
-      );
+      console.warn("警告: OPENAI_API_KEY が環境変数に設定されていません");
     }
 
-    // 適切なモデル名を確保（デフォルトを変更）
+    // 適切なモデル名を確保
     const modelName = process.env.OPENAI_MODEL || "gpt-4o";
-    console.log(`Using OpenAI model: ${modelName}`);
+    console.log(`OpenAI モデルを使用: ${modelName}`);
 
     try {
       // 通常の応答用モデル
@@ -44,13 +46,15 @@ export class AIAssistantService {
         timeout: 60000, // タイムアウトを60秒に設定
       });
     } catch (error) {
-      console.error("Failed to initialize OpenAI models:", error);
+      console.error("OpenAIモデル初期化エラー:", error);
     }
 
     this.outputParser = new StringOutputParser();
     this.reviewService = new ReviewService();
     this.submissionService = new SubmissionService();
     this.feedbackService = new FeedbackService();
+    this.backlogService = new BacklogService();
+    this.repositoryVectorService = new RepositoryVectorSearchService();
   }
 
   /**
@@ -71,7 +75,7 @@ export class AIAssistantService {
   ): Promise<string> {
     try {
       console.log(
-        `Processing message for review #${reviewId}: "${userMessage.substring(
+        `メッセージを処理中 (レビューID: ${reviewId}): "${userMessage.substring(
           0,
           50
         )}..."`
@@ -79,7 +83,7 @@ export class AIAssistantService {
 
       // コンテキスト情報を充実させる
       const enhancedContext = await this.enhanceContext(reviewId, context);
-      console.log("Context enhanced successfully");
+      console.log("コンテキスト拡張が完了しました");
 
       // プロンプトテンプレートを作成
       const promptTemplate = PromptTemplate.fromTemplate(`
@@ -97,6 +101,12 @@ export class AIAssistantService {
         
         ##フィードバック
         {feedbacks}
+
+        ##Backlogコメント履歴
+        {backlogComments}
+
+        ##関連コード
+        {relatedCode}
         
         ##ユーザーからの質問
         {userMessage}
@@ -105,11 +115,13 @@ export class AIAssistantService {
         1. 丁寧かつプロフェッショナルな口調で回答してください。
         2. 新入社員向けに分かりやすく説明してください。必要に応じて具体例を示してください。
         3. 質問に直接関係するフィードバックがある場合は、それを参照してください。
-        4. フィードバックの内容について説明を求められたら、具体的な改善方法を提案してください。
-        5. 分からないことには正直に「分かりません」と答えてください。
-        6. 回答は簡潔に、かつ必要な情報を網羅するようにしてください。
-        7. 可能な場合は、関連する公式ドキュメントやチュートリアルへのリンクを提供してください。
-        8, 適度に改行や段落を入れて回答してください。
+        4. Backlogのコメント履歴が関連する質問であれば、その内容を参照して回答してください。
+        5. 関連コードセクションのコード例を参照して、具体的な回答を提供してください。
+        6. フィードバックの内容について説明を求められたら、具体的な改善方法を提案してください。
+        7. 分からないことには正直に「分かりません」と答えてください。
+        8. 回答は簡潔に、かつ必要な情報を網羅するようにしてください。
+        9. 可能な場合は、関連する公式ドキュメントやチュートリアルへのリンクを提供してください。
+        10. 適度に改行や段落を入れて回答してください。
 
         ## デザイン(backlog基準)
         - タイトル： ## タイトル
@@ -141,24 +153,28 @@ export class AIAssistantService {
         codeContent:
           enhancedContext.codeContent || "コード内容は提供されていません。",
         feedbacks: formattedFeedbacks,
+        backlogComments:
+          enhancedContext.backlogComments || "Backlogコメントはありません。",
+        relatedCode:
+          enhancedContext.relatedCode || "関連コードは見つかりませんでした。",
         userMessage,
       };
 
-      console.log("Sending prompt to AI model");
+      console.log("AIモデルにプロンプトを送信します");
 
       // プロンプトに変数を設定
       const chain = promptTemplate.pipe(this.model).pipe(this.outputParser);
       const response = await chain.invoke(promptVariables);
 
-      console.log(`Response generated successfully (${response.length} chars)`);
+      console.log(`応答の生成が完了しました (${response.length} 文字)`);
       return response;
     } catch (error) {
-      console.error("AI Assistant error:", error);
+      console.error("AIアシスタントエラー:", error);
 
       // より詳細なエラーメッセージをログに記録
       if (error instanceof Error) {
-        console.error(`Error details: ${error.message}`);
-        console.error(`Stack trace: ${error.stack}`);
+        console.error(`エラー詳細: ${error.message}`);
+        console.error(`スタックトレース: ${error.stack}`);
         return `申し訳ありません。AIアシスタントでエラーが発生しました: ${error.message}`;
       }
 
@@ -166,9 +182,6 @@ export class AIAssistantService {
     }
   }
 
-  /**
-   * ストリーミング応答を取得
-   */
   /**
    * ストリーミング応答を取得
    */
@@ -186,11 +199,11 @@ export class AIAssistantService {
     }
   ): AsyncGenerator<string> {
     try {
-      console.log(`Processing streaming message for review #${reviewId}`);
+      console.log(`ストリーミングメッセージを処理中 (レビューID: ${reviewId})`);
 
       // コンテキスト情報を充実させる
       const enhancedContext = await this.enhanceContext(reviewId, context);
-      console.log("Context enhanced successfully for streaming");
+      console.log("ストリーミング用のコンテキスト拡張が完了しました");
 
       // プロンプトテンプレートを作成
       const promptTemplate = PromptTemplate.fromTemplate(`
@@ -208,6 +221,12 @@ export class AIAssistantService {
       
       ##フィードバック
       {feedbacks}
+
+      ##Backlogコメント履歴
+      {backlogComments}
+
+      ##関連コード
+      {relatedCode}
       
       ##ユーザーからの質問
       {userMessage}
@@ -216,10 +235,12 @@ export class AIAssistantService {
       1. 丁寧かつプロフェッショナルな口調で回答してください。
       2. 新入社員向けに分かりやすく説明してください。必要に応じて具体例を示してください。
       3. 質問に直接関係するフィードバックがある場合は、それを参照してください。
-      4. フィードバックの内容について説明を求められても回答を提示しないでください。
-      5. 分からないことには正直に「分かりません」と答えてください。
-      6. 回答は簡潔に、かつ必要な情報を網羅するようにしてください。
-      7. 可能な場合は、関連する公式ドキュメントやチュートリアルへのリンクを提供してください。
+      4. Backlogのコメント履歴が関連する質問であれば、その内容を参照して回答してください。
+      5. 関連コードセクションのコード例を参照して、具体的な回答を提供してください。
+      6. フィードバックの内容について説明を求められても回答を提示しないでください。
+      7. 分からないことには正直に「分かりません」と答えてください。
+      8. 回答は簡潔に、かつ必要な情報を網羅するようにしてください。
+      9. 可能な場合は、関連する公式ドキュメントやチュートリアルへのリンクを提供してください。
 
       ## 厳守事項
       コード内容やフィードバックに関係ない質問がある場合には絶対に回答しないでください。
@@ -240,10 +261,14 @@ export class AIAssistantService {
         codeContent:
           enhancedContext.codeContent || "コード内容は提供されていません。",
         feedbacks: formattedFeedbacks,
+        backlogComments:
+          enhancedContext.backlogComments || "Backlogコメントはありません。",
+        relatedCode:
+          enhancedContext.relatedCode || "関連コードは見つかりませんでした。",
         userMessage,
       };
 
-      console.log("Starting streaming response generation");
+      console.log("ストリーミング応答の生成を開始します");
 
       try {
         // ストリーミングモデルとチェーンをセットアップ
@@ -277,21 +302,21 @@ export class AIAssistantService {
           yield bufferText;
         }
 
-        console.log("Streaming response completed successfully");
+        console.log("ストリーミング応答の生成が完了しました");
       } catch (innerError) {
-        console.error("Error during streaming generation:", innerError);
+        console.error("ストリーミング生成中にエラーが発生:", innerError);
         // ストリーミング中のエラーを捕捉し、適切なメッセージを返す
         yield innerError instanceof Error
           ? `ストリーミング生成中にエラーが発生しました: ${innerError.message}`
           : "ストリーミング生成中にエラーが発生しました。";
       }
     } catch (error) {
-      console.error("AI Assistant streaming error:", error);
+      console.error("AIアシスタントストリーミングエラー:", error);
 
       // エラーのスタックトレースをログに出力
       if (error instanceof Error) {
-        console.error(`Error details: ${error.message}`);
-        console.error(`Stack trace: ${error.stack}`);
+        console.error(`エラー詳細: ${error.message}`);
+        console.error(`スタックトレース: ${error.stack}`);
         yield `申し訳ありません。AIアシスタントでエラーが発生しました: ${error.message}`;
       } else {
         yield "申し訳ありません、エラーが発生しました。もう一度お試しください。";
@@ -312,31 +337,100 @@ export class AIAssistantService {
         suggestion: string;
         priority: string;
       }>;
+      backlogComments?: string;
+      relatedCode?: string;
     }
   ) {
     let enhancedContext = { ...context };
+    let backlogComments = "";
+    let relatedCode = "";
 
     try {
       // レビュー情報を取得（リクエストに含まれていない場合）
       if (!enhancedContext.reviewTitle) {
-        console.log(`Fetching review title for review #${reviewId}`);
+        console.log(`レビュータイトルを取得中 (レビューID: ${reviewId})`);
         const review = await this.reviewService.getReviewById(reviewId);
         if (review) {
           enhancedContext.reviewTitle = review.title;
-          console.log(`Retrieved review title: "${review.title}"`);
+          console.log(`レビュータイトルを取得: "${review.title}"`);
+
+          // Backlog情報が存在する場合、コメント履歴を取得
+          if (
+            review.backlog_pr_id &&
+            review.backlog_project &&
+            review.backlog_repository
+          ) {
+            try {
+              console.log(
+                `Backlogコメント履歴を取得中 (PR #${review.backlog_pr_id})`
+              );
+              const comments = await this.backlogService.getPullRequestComments(
+                review.backlog_project,
+                review.backlog_repository,
+                review.backlog_pr_id,
+                { count: 10, order: "desc" }
+              );
+
+              if (comments && comments.length > 0) {
+                backlogComments = this.formatBacklogComments(comments);
+                console.log(
+                  `Backlogコメント ${comments.length}件を取得しました`
+                );
+              } else {
+                console.log(
+                  `PR #${review.backlog_pr_id} にコメントはありません`
+                );
+              }
+            } catch (commentError) {
+              console.error("Backlogコメント取得エラー:", commentError);
+            }
+
+            // ベクトル検索で関連コードを取得
+            try {
+              console.log(`リポジトリベクトルストアから関連コードを取得中`);
+              const collectionName =
+                `backlog_${review.backlog_project}_${review.backlog_repository}`.replace(
+                  /[^a-zA-Z0-9_]/g,
+                  "_"
+                );
+
+              // 既存のコンテンツから検索クエリを作成
+              const query = enhancedContext.codeContent
+                ? enhancedContext.codeContent.substring(0, 1000) // コード内容の一部を使用
+                : review.title; // コードがない場合はレビュータイトルを使用
+
+              const similarCode =
+                await this.repositoryVectorService.searchSimilarCodeBySnippet(
+                  collectionName,
+                  query,
+                  3 // 最大3件取得
+                );
+
+              if (similarCode && similarCode.length > 0) {
+                relatedCode = this.formatSimilarCode(similarCode);
+                console.log(`関連コード ${similarCode.length}件を取得しました`);
+              } else {
+                console.log(`関連コードは見つかりませんでした`);
+              }
+            } catch (vectorError) {
+              console.error("ベクトル検索エラー:", vectorError);
+            }
+          }
         } else {
-          console.log(`No review found with ID ${reviewId}`);
+          console.log(
+            `レビューID ${reviewId} に該当するレビューが見つかりません`
+          );
         }
       }
 
       // 最新のコード提出を取得（コードコンテンツがない場合）
       if (!enhancedContext.codeContent) {
-        console.log(`Fetching code submissions for review #${reviewId}`);
+        console.log(`コード提出を取得中 (レビューID: ${reviewId})`);
         const submissions =
           await this.submissionService.getSubmissionsByReviewId(reviewId);
 
         if (submissions && submissions.length > 0) {
-          console.log(`Found ${submissions.length} code submissions`);
+          console.log(`${submissions.length}件のコード提出が見つかりました`);
 
           // 最新のコード提出を取得
           const latestSubmission = submissions.reduce((latest, current) =>
@@ -344,13 +438,13 @@ export class AIAssistantService {
           );
           enhancedContext.codeContent = latestSubmission.code_content;
           console.log(
-            `Using latest code submission (version ${latestSubmission.version})`
+            `最新のコード提出を使用 (バージョン ${latestSubmission.version})`
           );
 
           // フィードバックを取得（フィードバックがない場合）
           if (!enhancedContext.feedbacks) {
             console.log(
-              `Fetching feedbacks for submission #${latestSubmission.id}`
+              `フィードバックを取得中 (提出ID: ${latestSubmission.id})`
             );
             const feedbacks =
               await this.feedbackService.getFeedbacksBySubmissionId(
@@ -358,7 +452,9 @@ export class AIAssistantService {
               );
 
             if (feedbacks && feedbacks.length > 0) {
-              console.log(`Found ${feedbacks.length} feedbacks`);
+              console.log(
+                `${feedbacks.length}件のフィードバックが見つかりました`
+              );
               enhancedContext.feedbacks = feedbacks.map((feedback) => ({
                 problem_point: feedback.problem_point,
                 suggestion: feedback.suggestion,
@@ -366,16 +462,22 @@ export class AIAssistantService {
               }));
             } else {
               console.log(
-                `No feedbacks found for submission #${latestSubmission.id}`
+                `提出ID ${latestSubmission.id} にフィードバックは見つかりませんでした`
               );
             }
           }
         } else {
-          console.log(`No code submissions found for review #${reviewId}`);
+          console.log(
+            `レビューID ${reviewId} にコード提出は見つかりませんでした`
+          );
         }
       }
+
+      // 拡張コンテキストにBacklogコメント履歴と関連コードを追加
+      enhancedContext.backlogComments = backlogComments;
+      enhancedContext.relatedCode = relatedCode;
     } catch (error) {
-      console.error("Error enhancing context:", error);
+      console.error("コンテキスト拡張中にエラー:", error);
       // エラーがあっても利用可能な情報だけで処理を続行
     }
 
@@ -403,6 +505,56 @@ export class AIAssistantService {
             feedback.suggestion
           }\n   優先度: ${feedback.priority}`
       )
+      .join("\n\n");
+  }
+
+  /**
+   * Backlogコメントをフォーマット
+   */
+  private formatBacklogComments(comments: any[]): string {
+    if (!comments || comments.length === 0) {
+      return "Backlogコメントはありません。";
+    }
+
+    return comments
+      .map((comment, index) => {
+        const createdAt = new Date(comment.created).toLocaleString("ja-JP");
+        const author = comment.createdUser?.name || "不明なユーザー";
+        let content = comment.content?.trim() || "内容なし";
+
+        // 長すぎる場合は短縮
+        if (content.length > 300) {
+          content = content.substring(0, 300) + "...";
+        }
+
+        return `${index + 1}. [${createdAt}] ${author}:\n${content}`;
+      })
+      .join("\n\n");
+  }
+
+  /**
+   * 類似コードをフォーマット
+   */
+  private formatSimilarCode(similarCode: any[]): string {
+    if (!similarCode || similarCode.length === 0) {
+      return "関連コードは見つかりませんでした。";
+    }
+
+    return similarCode
+      .map((code, index) => {
+        let content = code.content?.trim() || "コードなし";
+        const metadata = code.metadata || {};
+        const source = metadata.source || "不明なファイル";
+
+        // 長すぎる場合は短縮
+        if (content.length > 500) {
+          content = content.substring(0, 500) + "...";
+        }
+
+        return `サンプル ${
+          index + 1
+        } (ファイル: ${source}):\n\`\`\`\n${content}\n\`\`\``;
+      })
       .join("\n\n");
   }
 }

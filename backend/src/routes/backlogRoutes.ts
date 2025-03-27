@@ -71,4 +71,40 @@ router.get(
   backlogController.getFileTree
 );
 
+// 新API追加: プルリクエストコメント一覧を取得
+router.get(
+  "/projects/:projectId/repositories/:repoId/pullRequests/:pullRequestId/comments",
+  authenticate,
+  backlogController.getPullRequestComments
+);
+
+// 新API追加: ファイル内容を取得
+router.get(
+  "/projects/:projectId/repositories/:repoId/contents",
+  authenticate,
+  backlogController.getFileContent
+);
+
+// 新API追加: リポジトリマッピング関連
+router.get(
+  "/repositories/mappings",
+  authenticate,
+  requireAdmin,
+  backlogController.getRepositoryMappings
+);
+
+router.post(
+  "/repositories/mappings",
+  authenticate,
+  requireAdmin,
+  backlogController.createManualRepositoryMapping
+);
+
+router.patch(
+  "/repositories/mappings/:repositoryId",
+  authenticate,
+  requireAdmin,
+  backlogController.updateRepositoryProjectMapping
+);
+
 export default router;

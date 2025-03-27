@@ -1,4 +1,3 @@
-// frontend/src/app/dashboard/reviews/[id]/backlog/page.tsx
 "use client";
 
 import { useState, useEffect } from "react";
@@ -84,18 +83,32 @@ export default function BacklogIntegrationPage({
   // 管理者かどうかを判定
   const isAdmin = user?.role === "admin";
 
+  // ========= 追加: 管理者以外はアクセスできないようにリダイレクト =========
+  useEffect(() => {
+    if (user && !isAdmin) {
+      toast({
+        title: "アクセス制限",
+        description: "現在、Backlog連携機能は管理者のみ利用可能です。",
+        variant: "destructive",
+      });
+      router.push(`/dashboard/reviews/${params.id}`);
+    }
+  }, [user, isAdmin, router, toast, params.id]);
+  // ====================================================================
+
   useEffect(() => {
     const fetchReviewData = async () => {
       try {
         // 管理者の場合はリダイレクト
         if (isAdmin) {
-          toast({
-            title: "権限エラー",
-            description: "管理者はBacklogへの送信ができません",
-            variant: "destructive",
-          });
-          router.push(`/dashboard/reviews/${params.id}`);
-          return;
+          // この条件は削除 - 管理者の場合はアクセス可能にする
+          // toast({
+          //   title: "権限エラー",
+          //   description: "管理者はBacklogへの送信ができません",
+          //   variant: "destructive",
+          // });
+          // router.push(`/dashboard/reviews/${params.id}`);
+          // return;
         }
 
         // レビュー情報を取得
@@ -148,6 +161,24 @@ export default function BacklogIntegrationPage({
       fetchReviewData();
     }
   }, [params.id, token, toast, router, isAdmin]);
+
+  // 管理者でない場合は早期リターン
+  if (!isAdmin) {
+    return (
+      <div className="space-y-8">
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>アクセス制限</AlertTitle>
+          <AlertDescription>
+            現在、Backlog連携機能は管理者のみ利用可能です。
+          </AlertDescription>
+        </Alert>
+        <Button onClick={() => router.push(`/dashboard/reviews/${params.id}`)}>
+          レビュー詳細に戻る
+        </Button>
+      </div>
+    );
+  }
 
   // プロジェクト一覧を取得
   const fetchProjects = async () => {

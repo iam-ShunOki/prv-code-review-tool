@@ -20,6 +20,20 @@ export class SubmissionController {
    */
   createSubmission = async (req: Request, res: Response): Promise<void> => {
     try {
+      // ======== 追加: 管理者権限チェック ========
+      const isAdmin = req.user?.role === "admin";
+      if (!isAdmin) {
+        console.log(
+          `アクセス拒否: 管理者以外のユーザー(ID: ${req.user?.id})がコード提出を試みました`
+        );
+        res.status(403).json({
+          success: false,
+          message: "現在、コード提出機能は管理者のみ利用可能です",
+        });
+        return;
+      }
+      // ====================================
+
       // 入力バリデーション
       const submissionSchema = z.object({
         review_id: z.number(),
@@ -51,7 +65,7 @@ export class SubmissionController {
         return;
       }
 
-      if (review.user_id !== userId) {
+      if (review.user_id !== userId && !isAdmin) {
         res.status(403).json({
           success: false,
           message: "このレビューにコードを提出する権限がありません",
@@ -60,6 +74,9 @@ export class SubmissionController {
       }
 
       // コード提出作成
+      console.log(
+        `コード提出を作成します: レビューID ${validatedData.review_id}`
+      );
       const submission = await this.submissionService.createSubmission({
         review_id: validatedData.review_id,
         code_content: validatedData.code_content,
@@ -67,12 +84,16 @@ export class SubmissionController {
       });
 
       // レビューのステータスを更新
+      console.log(
+        `レビューステータスを更新します: レビューID ${validatedData.review_id}`
+      );
       await this.reviewService.updateReviewStatus(
         validatedData.review_id,
         ReviewStatus.IN_PROGRESS
       );
 
       // AIレビューキューに追加
+      console.log(`AIレビューキューに追加します: 提出ID ${submission.id}`);
       await ReviewQueueService.getInstance().addToQueue(submission.id);
 
       res.status(201).json({
@@ -82,17 +103,20 @@ export class SubmissionController {
       });
     } catch (error) {
       if (error instanceof z.ZodError) {
+        console.error(`バリデーションエラー: ${JSON.stringify(error.errors)}`);
         res.status(400).json({
           success: false,
           message: "バリデーションエラー",
           errors: error.errors,
         });
       } else if (error instanceof Error) {
+        console.error(`コード提出エラー: ${error.message}`);
         res.status(400).json({
           success: false,
           message: error.message,
         });
       } else {
+        console.error(`予期せぬエラーが発生しました: ${error}`);
         res.status(500).json({
           success: false,
           message: "予期せぬエラーが発生しました",
@@ -134,6 +158,9 @@ export class SubmissionController {
 
       // 管理者でなく、かつ自分のレビューでない場合はアクセス拒否
       if (!isAdmin && review.user_id !== userId) {
+        console.log(
+          `アクセス拒否: ユーザー(ID: ${userId})がレビュー(ID: ${reviewId})の提出一覧を取得しようとしました`
+        );
         res.status(403).json({
           success: false,
           message: "このレビューの提出一覧を取得する権限がありません",
@@ -142,6 +169,7 @@ export class SubmissionController {
       }
 
       // コード提出一覧取得
+      console.log(`コード提出一覧を取得します: レビューID ${reviewId}`);
       const submissions = await this.submissionService.getSubmissionsByReviewId(
         reviewId
       );
@@ -151,6 +179,7 @@ export class SubmissionController {
         data: submissions,
       });
     } catch (error) {
+      console.error(`コード提出一覧取得エラー: ${error}`);
       res.status(500).json({
         success: false,
         message: "コード提出一覧取得中にエラーが発生しました",

@@ -1,4 +1,3 @@
-// frontend/src/app/dashboard/reviews/[id]/submit/page.tsx
 "use client";
 
 import { useState, useEffect } from "react";
@@ -13,6 +12,7 @@ import {
   CardContent,
   CardFooter,
 } from "@/components/ui/card";
+import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -84,6 +84,19 @@ export default function SubmitRevisionPage({
 
   // 管理者かどうかを判定
   const isAdmin = user?.role === "admin";
+
+  // ========= 追加: 管理者以外はアクセスできないようにリダイレクト =========
+  useEffect(() => {
+    if (user && !isAdmin) {
+      toast({
+        title: "アクセス制限",
+        description: "現在、修正版提出機能は管理者のみ利用可能です。",
+        variant: "destructive",
+      });
+      router.push(`/dashboard/reviews/${params.id}`);
+    }
+  }, [user, isAdmin, router, toast, params.id]);
+  // ====================================================================
 
   useEffect(() => {
     const fetchReviewAndSubmissions = async () => {
@@ -160,6 +173,24 @@ export default function SubmitRevisionPage({
       fetchReviewAndSubmissions();
     }
   }, [params.id, token, toast]);
+
+  // 管理者でない場合は早期リターン
+  if (!isAdmin) {
+    return (
+      <div className="space-y-8">
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>アクセス制限</AlertTitle>
+          <AlertDescription>
+            現在、修正版提出機能は管理者のみ利用可能です。
+          </AlertDescription>
+        </Alert>
+        <Button onClick={() => router.push(`/dashboard/reviews/${params.id}`)}>
+          レビュー詳細に戻る
+        </Button>
+      </div>
+    );
+  }
 
   const handleSubmit = async () => {
     if (!code.trim()) {

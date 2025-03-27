@@ -30,11 +30,27 @@ export class RepositoryVectorSearchService {
     this.backlogService = new BacklogService();
 
     // ディレクトリが存在しない場合は作成
-    if (!fs.existsSync(this.vectorStoreDirectory)) {
-      fs.mkdirSync(this.vectorStoreDirectory, { recursive: true });
-    }
-    if (!fs.existsSync(this.tempDirectory)) {
-      fs.mkdirSync(this.tempDirectory, { recursive: true });
+    this.ensureDirectories();
+  }
+
+  /**
+   * 必要なディレクトリの存在を確認し、なければ作成
+   */
+  private async ensureDirectories(): Promise<void> {
+    try {
+      if (!fs.existsSync(this.vectorStoreDirectory)) {
+        console.log(
+          `ベクトルストアディレクトリを作成: ${this.vectorStoreDirectory}`
+        );
+        await mkdirPromise(this.vectorStoreDirectory, { recursive: true });
+      }
+
+      if (!fs.existsSync(this.tempDirectory)) {
+        console.log(`一時ディレクトリを作成: ${this.tempDirectory}`);
+        await mkdirPromise(this.tempDirectory, { recursive: true });
+      }
+    } catch (error) {
+      console.error("ディレクトリ作成エラー:", error);
     }
   }
 
@@ -51,7 +67,7 @@ export class RepositoryVectorSearchService {
       "_"
     );
     console.log(
-      `Vectorizing repository: ${projectKey}/${repositoryName} (${branch}) into collection ${collectionName}`
+      `リポジトリをベクトル化: ${projectKey}/${repositoryName} (${branch}) → コレクション ${collectionName}`
     );
 
     let repoDir = "";
@@ -62,25 +78,29 @@ export class RepositoryVectorSearchService {
         repositoryName,
         branch
       );
-      console.log(`Cloned repository to ${repoDir}`);
+      console.log(`リポジトリをクローン完了: ${repoDir}`);
 
       // ベクトルストアを初期化
       let vectorStore = await this.initializeVectorStore(collectionName);
 
       // コードファイルを検索して読み込み
       const documents = await this.loadRepositoryDocuments(repoDir);
-      console.log(`Loaded ${documents.length} documents from repository`);
+      console.log(
+        `${documents.length}個のドキュメントをリポジトリから読み込みました`
+      );
 
       if (documents.length > 0) {
         // ドキュメントをベクトルストアに追加
         await vectorStore.addDocuments(documents);
-        console.log(`Added ${documents.length} documents to vector store`);
+        console.log(
+          `ベクトルストアに${documents.length}個のドキュメントを追加しました`
+        );
       }
 
       return collectionName;
     } catch (error) {
       console.error(
-        `Error vectorizing repository ${projectKey}/${repositoryName}:`,
+        `リポジトリのベクトル化エラー ${projectKey}/${repositoryName}:`,
         error
       );
       throw error;
@@ -89,10 +109,12 @@ export class RepositoryVectorSearchService {
       if (repoDir && fs.existsSync(repoDir)) {
         try {
           await this.backlogService.cleanupRepository(repoDir);
-          console.log(`Cleaned up repository directory: ${repoDir}`);
+          console.log(
+            `リポジトリディレクトリをクリーンアップしました: ${repoDir}`
+          );
         } catch (cleanupError) {
           console.error(
-            "Error cleaning up repository directory:",
+            "リポジトリディレクトリのクリーンアップエラー:",
             cleanupError
           );
         }
@@ -109,6 +131,10 @@ export class RepositoryVectorSearchService {
     limit: number = 5
   ): Promise<{ document: Document; score: number }[]> {
     try {
+      console.log(
+        `類似コード検索: コレクション ${collectionName}, 上限 ${limit}件`
+      );
+
       // ベクトルストアを初期化
       const vectorStore = await this.initializeVectorStore(collectionName);
 
@@ -122,7 +148,7 @@ export class RepositoryVectorSearchService {
       }));
     } catch (error) {
       console.error(
-        `Error searching similar code in collection ${collectionName}:`,
+        `類似コード検索エラー (コレクション ${collectionName}):`,
         error
       );
       return [];
@@ -212,7 +238,7 @@ export class RepositoryVectorSearchService {
                 );
               }
             } catch (error) {
-              console.error(`Error reading file ${fullPath}:`, error);
+              console.error(`ファイル読み込みエラー ${fullPath}:`, error);
             }
           }
         }
@@ -230,6 +256,10 @@ export class RepositoryVectorSearchService {
     limit: number = 5
   ): Promise<{ document: Document; score: number }[]> {
     try {
+      console.log(
+        `差分コードの類似コード検索: コレクション ${collectionName}, 上限 ${limit}件`
+      );
+
       // 差分から検索用のクリーンなコードを抽出（+/-などの記号を除去）
       const cleanedCode = this.extractCodeFromDiff(diffContent);
 
@@ -241,7 +271,7 @@ export class RepositoryVectorSearchService {
       );
     } catch (error) {
       console.error(
-        `Error searching similar code for diff in ${collectionName}:`,
+        `差分コードの類似コード検索エラー (${collectionName}):`,
         error
       );
       return [];
@@ -292,7 +322,7 @@ export class RepositoryVectorSearchService {
         filePath,
       };
     } catch (error) {
-      console.error("Error extracting code from git diff:", error);
+      console.error("git diff からのコード抽出エラー:", error);
       return {
         content: "",
         filePath: null,
@@ -303,9 +333,6 @@ export class RepositoryVectorSearchService {
   /**
    * コードスニペットに類似したコードをベクトルDBから検索
    */
-  /**
-   * コードスニペットに類似したコードをベクトルDBから検索
-   */
   async searchSimilarCodeBySnippet(
     collectionName: string,
     codeSnippet: string,
@@ -313,7 +340,9 @@ export class RepositoryVectorSearchService {
     excludeExactMatches: boolean = true
   ): Promise<{ content: string; metadata: any; score: number }[]> {
     try {
-      console.log(`Searching similar code in collection: ${collectionName}`);
+      console.log(
+        `コードスニペットの類似コード検索: コレクション ${collectionName}`
+      );
 
       // ベクトルストアを初期化
       const vectorStore = await this.initializeVectorStore(collectionName);
@@ -340,12 +369,15 @@ export class RepositoryVectorSearchService {
       }
 
       // スコアでソートして上限数まで返す
-      return processedResults
+      const results_sorted = processedResults
         .sort((a, b) => a.score - b.score) // スコアが低いほど類似度が高い
         .slice(0, limit);
+
+      console.log(`${results_sorted.length}件の類似コードが見つかりました`);
+      return results_sorted;
     } catch (error) {
       console.error(
-        `Error searching similar code in collection ${collectionName}:`,
+        `コードスニペットの類似コード検索エラー (${collectionName}):`,
         error
       );
       return [];
@@ -362,7 +394,7 @@ export class RepositoryVectorSearchService {
   ): Promise<{ content: string; metadata: any; score: number }[]> {
     try {
       console.log(
-        `Searching by file path for ${filePath} in collection: ${collectionName}`
+        `ファイルパスによる検索: ${filePath} (コレクション: ${collectionName})`
       );
 
       // ベクトルストアを初期化
@@ -395,7 +427,7 @@ export class RepositoryVectorSearchService {
       }));
     } catch (error) {
       console.error(
-        `Error searching by file path in ${collectionName}:`,
+        `ファイルパスによる検索エラー (${collectionName}:${filePath}):`,
         error
       );
       return [];
@@ -437,7 +469,7 @@ export class RepositoryVectorSearchService {
       }`;
 
       console.log(
-        `Connecting to Chroma at ${chromaUrl} for collection ${collectionName}`
+        `Chromaに接続: ${chromaUrl} (コレクション ${collectionName})`
       );
 
       try {
@@ -453,7 +485,7 @@ export class RepositoryVectorSearchService {
           }
         );
       } catch (error) {
-        console.log(`Creating new collection: ${collectionName}`);
+        console.log(`新規コレクション作成: ${collectionName}`);
 
         // 新規コレクション作成
         return await Chroma.fromDocuments(
@@ -469,11 +501,63 @@ export class RepositoryVectorSearchService {
         );
       }
     } catch (error) {
-      console.error(
-        `Error initializing vector store for ${collectionName}:`,
-        error
-      );
+      console.error(`ベクトルストア初期化エラー (${collectionName}):`, error);
       throw error;
+    }
+  }
+
+  /**
+   * AIアシスタント用にリポジトリからコンテキストを抽出
+   */
+  async extractRepositoryContext(
+    projectKey: string,
+    repositoryName: string,
+    query: string,
+    limit: number = 3
+  ): Promise<string> {
+    try {
+      console.log(
+        `リポジトリコンテキスト抽出: ${projectKey}/${repositoryName}, クエリ: "${query.substring(
+          0,
+          30
+        )}..."`
+      );
+
+      // コレクション名を構築
+      const collectionName = `${projectKey}_${repositoryName}_master`.replace(
+        /[^a-zA-Z0-9_]/g,
+        "_"
+      );
+
+      // 類似コードを検索
+      const similarCode = await this.searchSimilarCodeBySnippet(
+        collectionName,
+        query,
+        limit
+      );
+
+      if (similarCode.length === 0) {
+        return "関連コードが見つかりませんでした。";
+      }
+
+      // 検索結果をフォーマット
+      let context = `# ${projectKey}/${repositoryName} のリポジトリから抽出した関連コード\n\n`;
+
+      similarCode.forEach((code, index) => {
+        const filePath = code.metadata?.source || "不明なファイル";
+        context += `## サンプル ${index + 1}: ${filePath}\n\n`;
+        context += "```\n";
+        context +=
+          code.content.length > 800
+            ? code.content.substring(0, 800) + "...(省略)..."
+            : code.content;
+        context += "\n```\n\n";
+      });
+
+      return context;
+    } catch (error) {
+      console.error("リポジトリコンテキスト抽出エラー:", error);
+      return "リポジトリからのコンテキスト抽出中にエラーが発生しました。";
     }
   }
 }

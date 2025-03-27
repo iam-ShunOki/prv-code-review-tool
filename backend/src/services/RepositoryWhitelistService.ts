@@ -3,7 +3,11 @@ import { AppDataSource } from "../index";
 import fs from "fs";
 import path from "path";
 import { promisify } from "util";
-import { BacklogRepositoryService } from "./BacklogRepositoryService";
+import {
+  BacklogRepository,
+  RepositoryStatus,
+} from "../models/BacklogRepository";
+import { RepositoryVectorSearchService } from "./RepositoryVectorSearchService";
 
 // 設定ファイルのパス
 const CONFIG_DIR = path.join(__dirname, "../../config");
@@ -34,8 +38,13 @@ export class RepositoryWhitelistService {
   private static instance: RepositoryWhitelistService;
   private whitelist: WhitelistedRepository[] = [];
   private loaded: boolean = false;
+  private backlogRepositoryRepository =
+    AppDataSource.getRepository(BacklogRepository);
+  private repositoryVectorService: RepositoryVectorSearchService;
 
-  private constructor() {}
+  private constructor() {
+    this.repositoryVectorService = new RepositoryVectorSearchService();
+  }
 
   /**
    * シングルトンインスタンスを取得
@@ -63,17 +72,19 @@ export class RepositoryWhitelistService {
       if (fs.existsSync(WHITELIST_PATH)) {
         const data = await readFile(WHITELIST_PATH, "utf8");
         this.whitelist = JSON.parse(data);
-        console.log(`Loaded ${this.whitelist.length} whitelisted repositories`);
+        console.log(
+          `${this.whitelist.length}件のホワイトリスト登録リポジトリをロードしました`
+        );
       } else {
         // ファイルが存在しない場合は空のホワイトリストを作成
         this.whitelist = [];
         await this.saveWhitelist();
-        console.log("Created new repository whitelist");
+        console.log("新しいリポジトリホワイトリストを作成しました");
       }
 
       this.loaded = true;
     } catch (error) {
-      console.error("Error initializing repository whitelist:", error);
+      console.error("リポジトリホワイトリスト初期化エラー:", error);
       // エラー時は空のホワイトリストで初期化
       this.whitelist = [];
       this.loaded = true;
@@ -91,7 +102,7 @@ export class RepositoryWhitelistService {
         "utf8"
       );
     } catch (error) {
-      console.error("Error saving repository whitelist:", error);
+      console.error("リポジトリホワイトリスト保存エラー:", error);
     }
   }
 
@@ -174,11 +185,11 @@ export class RepositoryWhitelistService {
 
     await this.saveWhitelist();
 
-    // [新規追加] バックグラウンドでベクトル化を開始
+    // バックグラウンドでベクトル化を開始
     this.triggerBackgroundVectorization(projectKey, repositoryName).catch(
       (error) =>
         console.error(
-          `Background vectorization error for ${projectKey}/${repositoryName}:`,
+          `バックグラウンドベクトル化エラー ${projectKey}/${repositoryName}:`,
           error
         )
     );
@@ -194,41 +205,65 @@ export class RepositoryWhitelistService {
     repositoryName: string
   ): Promise<void> {
     try {
-      // まず backlog_repositories テーブルにリポジトリが登録されているか確認
-      const backlogRepositoryService = new BacklogRepositoryService();
-      let repository = await backlogRepositoryService.getRepositoryByDetails(
-        projectKey,
-        repositoryName
-      );
+      // まずデータベースにリポジトリが登録されているか確認
+      let repository = await this.backlogRepositoryRepository.findOne({
+        where: {
+          project_key: projectKey,
+          repository_name: repositoryName,
+        },
+      });
 
       // 登録されていない場合は新規登録
       if (!repository) {
         console.log(
-          `Repository ${projectKey}/${repositoryName} not found in database, registering now`
+          `リポジトリ ${projectKey}/${repositoryName} がデータベースに見つからないため、登録します`
         );
 
-        repository = await backlogRepositoryService.registerRepository({
+        const newRepositoryData = {
           project_key: projectKey,
           project_name: projectKey, // 詳細情報がないのでキーを代用
           repository_name: repositoryName,
-          description: "Auto-registered from whitelist",
-        });
+          description: "ホワイトリストから自動登録",
+          status: RepositoryStatus.REGISTERED,
+          is_active: true,
+          vectorstore_collection:
+            `backlog_${projectKey}_${repositoryName}`.replace(
+              /[^a-zA-Z0-9_]/g,
+              "_"
+            ),
+        };
+
+        const newRepository =
+          this.backlogRepositoryRepository.create(newRepositoryData);
+        repository = await this.backlogRepositoryRepository.save(newRepository);
       }
 
       // ベクトル化実行
       console.log(
-        `Starting vectorization for repository ${repository.id}: ${projectKey}/${repositoryName}`
+        `リポジトリのベクトル化を開始: ${repository.id}: ${projectKey}/${repositoryName}`
       );
-      await backlogRepositoryService.cloneAndVectorizeRepository(repository.id);
+
+      const collectionName =
+        await this.repositoryVectorService.vectorizeRepository(
+          projectKey,
+          repositoryName
+        );
+
+      // ベクトル化成功時の更新
+      if (repository) {
+        repository.status = RepositoryStatus.VECTORIZED;
+        repository.vectorstore_collection = collectionName;
+        repository.last_vectorized_at = new Date();
+        repository.error_message = null;
+
+        await this.backlogRepositoryRepository.save(repository);
+      }
 
       console.log(
-        `Vectorization completed for repository ${projectKey}/${repositoryName}`
+        `リポジトリ ${projectKey}/${repositoryName} のベクトル化が完了しました`
       );
     } catch (error) {
-      console.error(
-        `Vectorization failed for ${projectKey}/${repositoryName}:`,
-        error
-      );
+      console.error(`ベクトル化エラー ${projectKey}/${repositoryName}:`, error);
       throw error;
     }
   }

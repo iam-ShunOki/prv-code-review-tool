@@ -19,6 +19,8 @@ import { UsageLimit } from "./models/UsageLimit";
 import { UsageLog } from "./models/UsageLog";
 import { EvaluationCriteria } from "./models/EvaluationCriteria";
 import { ChatMessage } from "./models/ChatMessage";
+import { YearlyCriteriaSetting } from "./models/YearlyCriteriaSetting";
+import { AcademicYearSetting } from "./models/AcademicYearSetting";
 import { InitialSchema1625000000000 } from "./migrations/1625000000000-InitialSchema";
 import { AddSessionsTable1625000000100 } from "./migrations/1625000000100-AddSessionsTable";
 import { AddNotificationSettingsTable1625000000200 } from "./migrations/1625000000200-AddNotificationSettingsTable";
@@ -34,6 +36,8 @@ import { AddCodeSnippetToFeedback1625000001100 } from "./migrations/162500000110
 import { CreateEvaluationCriteria1625000001200 } from "./migrations/1625000001200-CreateEvaluationCriteria";
 import { CreateChatMessagesTable1625000001300 } from "./migrations/1625000001300-CreateChatMessagesTable";
 import { AddSessionIdToChatMessages1625000001400 } from "./migrations/1625000001400-AddSessionIdToChatMessages";
+import { CreateFeedbackChecklistFields1625000001500 } from "./migrations/1625000001500-CreateFeedbackChecklistFields";
+import { CreateYearlyCriteriaSettings1625000001600 } from "./migrations/1625000001600-CreateYearlyCriteriaSettings";
 // 環境変数の読み込み
 dotenv.config();
 
@@ -65,6 +69,8 @@ export const AppDataSource = new DataSource({
     UsageLog,
     EvaluationCriteria,
     ChatMessage,
+    YearlyCriteriaSetting,
+    AcademicYearSetting,
   ],
   migrations: [
     InitialSchema1625000000000,
@@ -82,6 +88,8 @@ export const AppDataSource = new DataSource({
     CreateEvaluationCriteria1625000001200,
     CreateChatMessagesTable1625000001300,
     AddSessionIdToChatMessages1625000001400,
+    CreateFeedbackChecklistFields1625000001500,
+    CreateYearlyCriteriaSettings1625000001600,
   ],
   subscribers: [],
 

@@ -1,184 +1,321 @@
 // backend/src/services/ChatService.ts
 import { AppDataSource } from "../index";
 import { ChatMessage, ChatSender } from "../models/ChatMessage";
+import { User } from "../models/User";
+import { Review } from "../models/Review";
 
 export class ChatService {
-  private chatRepository = AppDataSource.getRepository(ChatMessage);
+  private chatMessageRepository = AppDataSource.getRepository(ChatMessage);
+  private userRepository = AppDataSource.getRepository(User);
+  private reviewRepository = AppDataSource.getRepository(Review);
 
   /**
-   * チャットメッセージを保存
+   * メッセージを保存
    */
   async saveMessage(
     userId: number,
     content: string,
     sender: ChatSender,
-    sessionId?: string,
+    sessionId: string,
     reviewId?: number
   ): Promise<ChatMessage> {
+    console.log(
+      `メッセージ保存: ユーザーID ${userId}, セッションID ${sessionId}, 送信者 ${sender}`
+    );
+
     try {
+      // ユーザーが存在するか確認
+      const user = await this.userRepository.findOneBy({ id: userId });
+      if (!user) {
+        throw new Error(`ユーザーID ${userId} が見つかりません`);
+      }
+
+      // レビューが指定されている場合、存在するか確認
+      if (reviewId) {
+        const review = await this.reviewRepository.findOneBy({ id: reviewId });
+        if (!review) {
+          console.warn(
+            `レビューID ${reviewId} が見つかりません。レビューIDなしでメッセージを保存します。`
+          );
+        }
+      }
+
+      // メッセージエンティティの作成
       const message = new ChatMessage();
       message.user_id = userId;
       message.content = content;
       message.sender = sender;
-
-      if (sessionId) {
-        message.session_id = sessionId;
-      }
+      message.session_id = sessionId;
 
       if (reviewId) {
         message.review_id = reviewId;
       }
 
-      return await this.chatRepository.save(message);
+      // メッセージを保存
+      const savedMessage = await this.chatMessageRepository.save(message);
+      console.log(`メッセージを保存しました: ID ${savedMessage.id}`);
+
+      return savedMessage;
     } catch (error) {
-      console.error("チャットメッセージ保存エラー:", error);
+      console.error("メッセージ保存エラー:", error);
       throw new Error(
-        `チャットメッセージの保存に失敗しました: ${
-          error instanceof Error ? error.message : String(error)
+        `メッセージの保存に失敗しました: ${
+          error instanceof Error ? error.message : "Unknown error"
         }`
       );
     }
   }
 
   /**
-   * ユーザーのチャット履歴を取得（特定のレビューやセッションに関連するメッセージのみを取得することも可能）
+   * チャット履歴の取得
    */
   async getChatHistory(
     userId: number,
-    options?: {
+    options: {
       reviewId?: number;
       sessionId?: string;
       limit?: number;
     }
   ): Promise<ChatMessage[]> {
+    console.log(
+      `チャット履歴取得: ユーザーID ${userId}, セッションID ${
+        options.sessionId || "なし"
+      }, レビューID ${options.reviewId || "なし"}`
+    );
+
     try {
-      const limit = options?.limit || 100;
-
-      // クエリビルダーを使用して検索条件を構築
-      const queryBuilder = this.chatRepository
+      // 検索条件を構築
+      const queryBuilder = this.chatMessageRepository
         .createQueryBuilder("chat")
-        .where("chat.user_id = :userId", { userId })
-        .orderBy("chat.created_at", "ASC")
-        .take(limit);
+        .where("chat.user_id = :userId", { userId });
 
-      // レビューIDが指定されている場合は条件に追加
-      if (options?.reviewId) {
-        queryBuilder.andWhere("chat.review_id = :reviewId", {
-          reviewId: options.reviewId,
-        });
-      }
-
-      // セッションIDが指定されている場合は条件に追加
-      if (options?.sessionId) {
+      // セッションIDが指定されている場合
+      if (options.sessionId) {
         queryBuilder.andWhere("chat.session_id = :sessionId", {
           sessionId: options.sessionId,
         });
       }
 
-      return await queryBuilder.getMany();
+      // レビューIDが指定されている場合
+      if (options.reviewId) {
+        queryBuilder.andWhere("chat.review_id = :reviewId", {
+          reviewId: options.reviewId,
+        });
+      }
+
+      // 並び順と取得件数
+      queryBuilder
+        .orderBy("chat.created_at", "ASC")
+        .limit(options.limit || 100);
+
+      // クエリを実行して結果を取得
+      const messages = await queryBuilder.getMany();
+      console.log(`${messages.length}件のメッセージを取得しました`);
+
+      return messages;
     } catch (error) {
       console.error("チャット履歴取得エラー:", error);
       throw new Error(
         `チャット履歴の取得に失敗しました: ${
-          error instanceof Error ? error.message : String(error)
+          error instanceof Error ? error.message : "Unknown error"
         }`
       );
     }
   }
 
   /**
-   * ユーザーの一意なセッションリストを取得
+   * ユーザーのチャットセッション一覧を取得
    */
   async getUserChatSessions(userId: number): Promise<any[]> {
+    console.log(`ユーザーのチャットセッション一覧取得: ユーザーID ${userId}`);
+
     try {
-      // セッションごとに最新のメッセージを取得
+      // ユーザーのセッション情報を集計するクエリ
       const query = `
         SELECT 
-          cm.session_id, 
-          MAX(cm.created_at) as last_message_time,
-          (
-            SELECT content 
-            FROM chat_messages 
-            WHERE user_id = ? AND session_id = cm.session_id 
-            ORDER BY created_at ASC 
-            LIMIT 1
-          ) as first_message,
-          COUNT(*) as message_count
+          chat.session_id,
+          MIN(chat.created_at) as first_message_at,
+          MAX(chat.created_at) as last_message_at,
+          COUNT(chat.id) as message_count,
+          r.id as review_id,
+          r.title as review_title
         FROM 
-          chat_messages cm
+          chat_messages chat
+        LEFT JOIN
+          reviews r ON chat.review_id = r.id
         WHERE 
-          cm.user_id = ?
-          AND cm.session_id IS NOT NULL
+          chat.user_id = ?
         GROUP BY 
-          cm.session_id
+          chat.session_id, r.id, r.title
         ORDER BY 
-          last_message_time DESC
-        LIMIT 50
+          last_message_at DESC
       `;
 
-      const results = await this.chatRepository.query(query, [userId, userId]);
+      // クエリ実行
+      const sessions = await AppDataSource.query(query, [userId]);
+      console.log(`${sessions.length}件のセッションを取得しました`);
 
-      // 各セッションの最初のメッセージからタイトルを抽出
-      return results.map((row: any) => {
-        // 最初のメッセージから30文字以内でタイトルを作成
-        const title = row.first_message
-          ? row.first_message.substring(0, 30) +
-            (row.first_message.length > 30 ? "..." : "")
-          : `セッション ${row.session_id.substring(0, 8)}`;
-
-        return {
-          session_id: row.session_id,
-          title,
-          last_activity: row.last_message_time,
-          message_count: row.message_count,
-          preview: row.first_message,
-          created_at: row.last_message_time,
-        };
-      });
+      return sessions;
     } catch (error) {
       console.error("チャットセッション取得エラー:", error);
       throw new Error(
         `チャットセッションの取得に失敗しました: ${
-          error instanceof Error ? error.message : String(error)
+          error instanceof Error ? error.message : "Unknown error"
         }`
       );
     }
   }
 
   /**
-   * 指定されたレビューに関連するチャットの件数を取得
+   * 特定セッションのメッセージを取得
    */
-  async getMessageCountForReview(reviewId: number): Promise<number> {
+  async getSessionMessages(
+    userId: number,
+    sessionId: string,
+    limit: number = 100
+  ): Promise<ChatMessage[]> {
+    console.log(
+      `セッションメッセージ取得: ユーザーID ${userId}, セッションID ${sessionId}`
+    );
+
     try {
-      return await this.chatRepository.count({
-        where: { review_id: reviewId },
-      });
+      const messages = await this.chatMessageRepository
+        .createQueryBuilder("chat")
+        .where("chat.user_id = :userId", { userId })
+        .andWhere("chat.session_id = :sessionId", { sessionId })
+        .orderBy("chat.created_at", "ASC")
+        .limit(limit)
+        .getMany();
+
+      console.log(`${messages.length}件のメッセージを取得しました`);
+      return messages;
     } catch (error) {
-      console.error(`レビュー(${reviewId})のメッセージ数取得エラー:`, error);
-      return 0;
+      console.error("セッションメッセージ取得エラー:", error);
+      throw new Error(
+        `セッションメッセージの取得に失敗しました: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`
+      );
     }
   }
 
   /**
-   * 古いチャットメッセージを削除（データベース肥大化防止）
-   * 例えば90日以上前のメッセージを削除など
+   * チャットメッセージの削除
    */
-  async pruneOldMessages(daysToKeep: number = 90): Promise<number> {
-    try {
-      const cutoffDate = new Date();
-      cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
+  async deleteMessages(
+    userId: number,
+    options: {
+      sessionId?: string;
+      reviewId?: number;
+    }
+  ): Promise<boolean> {
+    console.log(
+      `メッセージ削除: ユーザーID ${userId}, セッションID ${
+        options.sessionId || "なし"
+      }, レビューID ${options.reviewId || "なし"}`
+    );
 
-      const result = await this.chatRepository
+    try {
+      // 検索条件を構築
+      const queryBuilder = this.chatMessageRepository
         .createQueryBuilder()
         .delete()
         .from(ChatMessage)
-        .where("created_at < :cutoffDate", { cutoffDate })
-        .execute();
+        .where("user_id = :userId", { userId });
 
-      return result.affected || 0;
+      // セッションIDが指定されている場合
+      if (options.sessionId) {
+        queryBuilder.andWhere("session_id = :sessionId", {
+          sessionId: options.sessionId,
+        });
+      }
+
+      // レビューIDが指定されている場合
+      if (options.reviewId) {
+        queryBuilder.andWhere("review_id = :reviewId", {
+          reviewId: options.reviewId,
+        });
+      }
+
+      // 削除クエリを実行
+      const result = await queryBuilder.execute();
+      console.log(`${result.affected || 0}件のメッセージを削除しました`);
+
+      return true;
     } catch (error) {
-      console.error("古いチャットメッセージの削除エラー:", error);
-      return 0;
+      console.error("メッセージ削除エラー:", error);
+      throw new Error(
+        `メッセージの削除に失敗しました: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`
+      );
+    }
+  }
+
+  /**
+   * レビュー関連のチャットコンテキスト情報を取得
+   */
+  async getReviewChatContext(reviewId: number): Promise<{
+    reviewTitle?: string;
+    recentMessages: { content: string; sender: string; created_at: Date }[];
+    backlogInfo?: {
+      pr_id?: number;
+      project?: string;
+      repository?: string;
+    };
+  }> {
+    console.log(
+      `レビューのチャットコンテキスト情報取得: レビューID ${reviewId}`
+    );
+
+    try {
+      // レビュー情報を取得
+      const review = await this.reviewRepository.findOne({
+        where: { id: reviewId },
+      });
+
+      if (!review) {
+        console.warn(`レビューID ${reviewId} が見つかりません`);
+        return { recentMessages: [] };
+      }
+
+      // 最近のメッセージを取得（最新の10件）
+      const recentMessages = await this.chatMessageRepository
+        .createQueryBuilder("chat")
+        .select(["chat.content", "chat.sender", "chat.created_at"])
+        .where("chat.review_id = :reviewId", { reviewId })
+        .orderBy("chat.created_at", "DESC")
+        .limit(10)
+        .getMany();
+
+      // コンテキスト情報を構築
+      const context = {
+        reviewTitle: review.title,
+        recentMessages: recentMessages,
+        backlogInfo: undefined as any,
+      };
+
+      // Backlog情報がある場合は追加
+      if (
+        review.backlog_pr_id &&
+        review.backlog_project &&
+        review.backlog_repository
+      ) {
+        context.backlogInfo = {
+          pr_id: review.backlog_pr_id,
+          project: review.backlog_project,
+          repository: review.backlog_repository,
+        };
+      }
+
+      return context;
+    } catch (error) {
+      console.error("レビューコンテキスト情報取得エラー:", error);
+      throw new Error(
+        `レビューコンテキスト情報の取得に失敗しました: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`
+      );
     }
   }
 }

@@ -18,4 +18,13 @@ router.get(
 // フィードバックの対応状態を更新
 router.patch("/:id/status", feedbackController.updateFeedbackStatus);
 
+// 【新規追加】フィードバックのチェック状態を更新
+router.patch("/:id/check", feedbackController.updateFeedbackCheckStatus);
+
+// 【新規追加】複数フィードバックのチェック状態を一括更新
+router.post("/bulk-check", feedbackController.bulkUpdateCheckStatus);
+
+// 【新規追加】フィードバックのカテゴリを更新
+router.patch("/:id/category", feedbackController.updateFeedbackCategory);
+
 export default router;

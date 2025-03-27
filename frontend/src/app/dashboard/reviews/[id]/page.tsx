@@ -1,4 +1,3 @@
-// frontend/src/app/dashboard/reviews/[id]/page.tsx
 "use client";
 
 import { useState, useEffect } from "react";
@@ -459,8 +458,8 @@ export default function ReviewDetailPage({
             レビュー一覧に戻る
           </Button>
 
-          {/* 管理者以外のユーザーにのみ表示 */}
-          {!isAdmin && (
+          {/* ========= 変更: 管理者のみボタンを表示 ========= */}
+          {isAdmin && (
             <div className="space-x-2">
               <Button variant="outline" asChild>
                 <Link href={`/dashboard/reviews/${review.id}/backlog`}>
@@ -475,6 +474,7 @@ export default function ReviewDetailPage({
               </Button>
             </div>
           )}
+          {/* ============================================== */}
         </CardFooter>
       </Card>
       {/* AIチャットボットを追加 */}

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter, useSearchParams } from "next/navigation"; // SearchParamsを追加
+import { useRouter, useSearchParams } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -66,6 +66,19 @@ export default function NewReviewPage() {
   // 管理者かどうかを判定
   const isAdmin = user?.role === "admin";
 
+  // ========= 追加: 管理者以外はアクセスできないようにリダイレクト =========
+  useEffect(() => {
+    if (user && !isAdmin) {
+      toast({
+        title: "アクセス制限",
+        description: "現在、新規レビュー依頼機能は管理者のみ利用可能です。",
+        variant: "destructive",
+      });
+      router.push("/dashboard/reviews");
+    }
+  }, [user, isAdmin, router, toast]);
+  // ====================================================================
+
   // コードレビュー機能が利用可能かどうか
   const canUseCodeReview = canUseFeature("code_review");
   const remainingReviews = getRemainingUsage("code_review");
@@ -102,7 +115,10 @@ export default function NewReviewPage() {
       }
     };
 
-    fetchProjects();
+    // 管理者の場合のみプロジェクト一覧を取得
+    if (token && isAdmin) {
+      fetchProjects();
+    }
   }, [token, isAdmin, toast]);
 
   // URLからプロジェクトIDを取得
@@ -132,6 +148,24 @@ export default function NewReviewPage() {
       project_id: undefined,
     },
   });
+
+  // 管理者でない場合は早期リターン
+  if (!isAdmin) {
+    return (
+      <div className="space-y-8">
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>アクセス制限</AlertTitle>
+          <AlertDescription>
+            現在、新規レビュー依頼機能は管理者のみ利用可能です。
+          </AlertDescription>
+        </Alert>
+        <Button onClick={() => router.push("/dashboard/reviews")}>
+          レビュー一覧に戻る
+        </Button>
+      </div>
+    );
+  }
 
   const onSubmit = async (formData: ReviewFormValues) => {
     if (!code.trim()) {
@@ -231,7 +265,7 @@ export default function NewReviewPage() {
     selectOnLineNumbers: true,
     roundedSelection: false,
     readOnly: false,
-    cursorStyle: "line",
+    cursorStyle: "line" as const,
     automaticLayout: true,
     minimap: { enabled: true },
   };

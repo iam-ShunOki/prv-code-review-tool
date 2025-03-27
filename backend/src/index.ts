@@ -258,6 +258,7 @@ import groupRoutes from "./routes/groupRoutes";
 import dashboardRoutes from "./routes/dashboardRoutes";
 import chatRoutes from "./routes/chatRoutes";
 import learningChatRoutes from "./routes/learningChatRoutes";
+import evaluationCriteriaRoutes from "./routes/evaluationCriteriaRoutes";
 // ルートの登録
 app.use("/api/auth", authRoutes);
 app.use("/api/reviews", reviewRoutes);
@@ -279,6 +280,7 @@ app.use("/api/groups", groupRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/chat", chatRoutes);
 app.use("/api/learning-chat", learningChatRoutes);
+app.use("/api/evaluation-criteria", evaluationCriteriaRoutes);
 // エラーハンドリング強化
 app.use(
   (

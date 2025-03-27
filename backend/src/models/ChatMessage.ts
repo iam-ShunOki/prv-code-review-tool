@@ -4,19 +4,20 @@ import {
   PrimaryGeneratedColumn,
   Column,
   CreateDateColumn,
+  UpdateDateColumn,
   ManyToOne,
   JoinColumn,
-  Index,
 } from "typeorm";
 import { User } from "./User";
 import { Review } from "./Review";
 
+// チャットの送信者タイプ
 export enum ChatSender {
   USER = "user",
   AI = "ai",
 }
 
-@Entity("chat_messages")
+@Entity({ name: "chat_messages" })
 export class ChatMessage {
   @PrimaryGeneratedColumn()
   id: number;
@@ -25,7 +26,7 @@ export class ChatMessage {
   user_id: number;
 
   @Column({ nullable: true })
-  review_id: number;
+  review_id?: number;
 
   @Column({ type: "text" })
   content: string;
@@ -37,18 +38,24 @@ export class ChatMessage {
   })
   sender: ChatSender;
 
+  @Column({ nullable: true })
+  session_id?: string;
+
+  @Column({ nullable: true })
+  parent_message_id?: number;
+
   @CreateDateColumn()
   created_at: Date;
 
-  @Column({ nullable: true, length: 100 })
-  @Index()
-  session_id: string;
+  @UpdateDateColumn()
+  updated_at: Date;
 
+  // リレーションシップ
   @ManyToOne(() => User)
   @JoinColumn({ name: "user_id" })
   user: User;
 
   @ManyToOne(() => Review, { nullable: true })
   @JoinColumn({ name: "review_id" })
-  review: Review;
+  review?: Review;
 }
