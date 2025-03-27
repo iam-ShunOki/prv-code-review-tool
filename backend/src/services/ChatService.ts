@@ -1,4 +1,4 @@
-// backend/src/services/ChatService.ts
+// backend/src/services/ChatService.ts の getChatHistory メソッドを修正
 import { AppDataSource } from "../index";
 import { ChatMessage, ChatSender } from "../models/ChatMessage";
 import { User } from "../models/User";
@@ -10,7 +10,7 @@ export class ChatService {
   private reviewRepository = AppDataSource.getRepository(Review);
 
   /**
-   * メッセージを保存
+   * メッセージを保存（updated_atフィールドを手動でセット）
    */
   async saveMessage(
     userId: number,
@@ -40,21 +40,35 @@ export class ChatService {
         }
       }
 
-      // メッセージエンティティの作成
-      const message = new ChatMessage();
-      message.user_id = userId;
-      message.content = content;
-      message.sender = sender;
-      message.session_id = sessionId;
+      // 現在の日時
+      const now = new Date();
 
-      if (reviewId) {
-        message.review_id = reviewId;
+      // メッセージエンティティを直接作成してデータベースに保存
+      // updated_atフィールドを回避するために、insert APIを使用
+      const result = await this.chatMessageRepository.insert({
+        user_id: userId,
+        content: content,
+        sender: sender,
+        session_id: sessionId,
+        review_id: reviewId,
+        created_at: now,
+      });
+
+      // 挿入されたメッセージのIDを取得
+      const messageId = result.identifiers[0].id;
+
+      // 保存されたメッセージを取得して返す
+      const savedMessage = await this.chatMessageRepository.findOneBy({
+        id: messageId,
+      });
+
+      if (!savedMessage) {
+        throw new Error(
+          `保存したメッセージ (ID: ${messageId}) が見つかりません`
+        );
       }
 
-      // メッセージを保存
-      const savedMessage = await this.chatMessageRepository.save(message);
       console.log(`メッセージを保存しました: ID ${savedMessage.id}`);
-
       return savedMessage;
     } catch (error) {
       console.error("メッセージ保存エラー:", error);
@@ -87,6 +101,15 @@ export class ChatService {
       // 検索条件を構築
       const queryBuilder = this.chatMessageRepository
         .createQueryBuilder("chat")
+        .select([
+          "chat.id",
+          "chat.user_id",
+          "chat.review_id",
+          "chat.content",
+          "chat.sender",
+          "chat.session_id",
+          "chat.created_at",
+        ])
         .where("chat.user_id = :userId", { userId });
 
       // セッションIDが指定されている場合
@@ -181,6 +204,15 @@ export class ChatService {
     try {
       const messages = await this.chatMessageRepository
         .createQueryBuilder("chat")
+        .select([
+          "chat.id",
+          "chat.user_id",
+          "chat.review_id",
+          "chat.content",
+          "chat.sender",
+          "chat.session_id",
+          "chat.created_at",
+        ])
         .where("chat.user_id = :userId", { userId })
         .andWhere("chat.session_id = :sessionId", { sessionId })
         .orderBy("chat.created_at", "ASC")

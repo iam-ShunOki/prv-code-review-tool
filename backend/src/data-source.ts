@@ -38,6 +38,7 @@ import { CreateChatMessagesTable1625000001300 } from "./migrations/1625000001300
 import { AddSessionIdToChatMessages1625000001400 } from "./migrations/1625000001400-AddSessionIdToChatMessages";
 import { CreateFeedbackChecklistFields1625000001500 } from "./migrations/1625000001500-CreateFeedbackChecklistFields";
 import { CreateYearlyCriteriaSettings1625000001600 } from "./migrations/1625000001600-CreateYearlyCriteriaSettings";
+import { AddParentMessageIdToChatMessages1625000001700 } from "./migrations/1625000001700-AddParentMessageIdToChatMessages";
 // 環境変数の読み込み
 dotenv.config();
 
@@ -90,6 +91,7 @@ export const AppDataSource = new DataSource({
     AddSessionIdToChatMessages1625000001400,
     CreateFeedbackChecklistFields1625000001500,
     CreateYearlyCriteriaSettings1625000001600,
+    AddParentMessageIdToChatMessages1625000001700,
   ],
   subscribers: [],
 
