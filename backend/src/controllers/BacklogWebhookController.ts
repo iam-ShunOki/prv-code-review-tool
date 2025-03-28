@@ -3,14 +3,24 @@ import { Request, Response } from "express";
 import { PullRequestMonitoringService } from "../services/PullRequestMonitoringService";
 import { WebhookUrlService } from "../services/WebhookUrlService";
 import { BacklogService } from "../services/BacklogService";
+import { MentionDetectionService } from "../services/MentionDetectionService";
+import { AutomaticReviewCreator } from "../services/AutomaticReviewCreator";
+import { AppDataSource } from "../index";
+import { Review } from "../models/Review";
 export class BacklogWebhookController {
   private pullRequestMonitoringService: PullRequestMonitoringService;
   private webhookUrlService: WebhookUrlService;
   private backlogService: BacklogService;
+  private mentionDetectionService: MentionDetectionService;
+  private automaticReviewCreator: AutomaticReviewCreator;
+  private reviewRepository = AppDataSource.getRepository(Review);
+
   constructor() {
     this.pullRequestMonitoringService = new PullRequestMonitoringService();
     this.webhookUrlService = WebhookUrlService.getInstance();
     this.backlogService = new BacklogService();
+    this.mentionDetectionService = new MentionDetectionService();
+    this.automaticReviewCreator = new AutomaticReviewCreator();
   }
 
   /**
@@ -27,7 +37,7 @@ export class BacklogWebhookController {
         const projectKey = content.project.projectKey;
         const repoName = content.repository.name;
         const pullRequestId = content.number;
-        const commentId = content.comment?.id; // コメントIDを取得
+        const commentId = content.comment?.id; // コメントID
 
         if (!commentId) {
           console.log("コメントIDがありません。スキップします");
@@ -39,35 +49,152 @@ export class BacklogWebhookController {
           `PR #${pullRequestId} へのコメント(ID: ${commentId})を受信しました。@codereviewをチェックします`
         );
 
-        // コメント内容にメンションがあるかチェック
-        if (content.comment && content.comment.content) {
-          const mentionDetectionService =
-            this.pullRequestMonitoringService["mentionDetectionService"];
-          const hasMention = mentionDetectionService.detectCodeReviewMention(
-            content.comment.content
+        // PR詳細を取得してステータスを確認
+        try {
+          const prDetails = await this.backlogService.getPullRequestById(
+            projectKey,
+            repoName,
+            pullRequestId
           );
 
-          if (hasMention) {
+          // PRのステータスをチェック
+          if (
+            prDetails.status &&
+            (prDetails.status.name === "Closed" ||
+              prDetails.status.name === "Merged")
+          ) {
             console.log(
-              `PR #${pullRequestId} のコメントに @codereview メンションがありました。レビューを実行します`
+              `PR #${pullRequestId} は ${prDetails.status.name} 状態のためスキップします`
+            );
+            res.status(200).json({
+              success: true,
+              message: `PR #${pullRequestId} は ${prDetails.status.name} 状態のためスキップしました`,
+            });
+            return;
+          }
+
+          // コメント内容にメンションがあるかチェック
+          if (content.comment && content.comment.content) {
+            const mentionDetectionService =
+              this.pullRequestMonitoringService["mentionDetectionService"];
+            const hasMention = mentionDetectionService.detectCodeReviewMention(
+              content.comment.content
             );
 
-            // プルリクエストのチェックを実行（コメントIDも渡す）
-            await this.pullRequestMonitoringService.checkSinglePullRequest(
+            if (hasMention) {
+              console.log(
+                `PR #${pullRequestId} のコメントに @codereview メンションがありました。レビューを実行します`
+              );
+
+              // プルリクエストのチェックを実行（コメントIDも渡す）
+              await this.pullRequestMonitoringService.checkSinglePullRequest(
+                projectKey,
+                repoName,
+                pullRequestId,
+                commentId
+              );
+            } else {
+              console.log(
+                `PR #${pullRequestId} のコメントに @codereview メンションがありません。スキップします`
+              );
+            }
+          }
+        } catch (prError) {
+          console.error(
+            `PR #${pullRequestId} の詳細取得中にエラーが発生しました:`,
+            prError
+          );
+          res.status(500).json({
+            success: false,
+            message: "PRの詳細取得中にエラーが発生しました",
+            error: prError instanceof Error ? prError.message : "不明なエラー",
+          });
+          return;
+        }
+      } else if (
+        event.type === "pull_request_create" ||
+        event.type === "pull_request_update"
+      ) {
+        // プルリクエスト作成/更新イベント処理
+        const content = event.content;
+        const projectKey = content.project.projectKey;
+        const repoName = content.repository.name;
+        const pullRequestId = content.number;
+        const description = content.description || "";
+
+        // PRステータスを確認する前に@codereviewメンションがあるか確認
+        if (this.mentionDetectionService.detectCodeReviewMention(description)) {
+          // プルリクエストの詳細情報を取得
+          try {
+            const prDetails = await this.backlogService.getPullRequestById(
               projectKey,
               repoName,
-              pullRequestId,
-              commentId
+              pullRequestId
             );
-          } else {
+
+            // PRのステータスをチェック
+            if (
+              prDetails.status &&
+              (prDetails.status.name === "Closed" ||
+                prDetails.status.name === "Merged")
+            ) {
+              console.log(
+                `PR #${pullRequestId} は ${prDetails.status.name} 状態のためスキップします`
+              );
+              res.status(200).json({
+                success: true,
+                message: `PR #${pullRequestId} は ${prDetails.status.name} 状態のためスキップしました`,
+              });
+              return;
+            }
+
             console.log(
-              `PR #${pullRequestId} のコメントに @codereview メンションがありません。スキップします`
+              `PR #${pullRequestId} の説明に @codereview メンションがありました。レビューを実行します`
             );
+
+            // 既存レビューを確認
+            const existingReview = await this.reviewRepository.findOne({
+              where: {
+                backlog_pr_id: pullRequestId,
+                backlog_project: projectKey,
+                backlog_repository: repoName,
+              },
+            });
+
+            // レビュー作成または更新
+            await this.automaticReviewCreator.createReviewFromPullRequest(
+              {
+                id: prDetails.id,
+                project: projectKey,
+                repository: repoName,
+                number: prDetails.number,
+                summary: prDetails.summary,
+                description: prDetails.description || "",
+                base: prDetails.base,
+                branch: prDetails.branch,
+                authorId: prDetails.createdUser?.id,
+                authorName: prDetails.createdUser?.name,
+                authorMailAddress: prDetails.createdUser?.mailAddress || null,
+              },
+              {
+                isReReview: existingReview !== null,
+                existingReviewId: existingReview?.id,
+              }
+            );
+          } catch (prError) {
+            console.error(
+              `PR #${pullRequestId} の詳細取得中にエラーが発生しました:`,
+              prError
+            );
+            res.status(500).json({
+              success: false,
+              message: "PRの詳細取得中にエラーが発生しました",
+              error:
+                prError instanceof Error ? prError.message : "不明なエラー",
+            });
+            return;
           }
         }
-      } else if (event.type.startsWith("pull_request")) {
-        // その他のプルリクエスト関連イベント処理（既存コード）
-        // ...
       }
 
       res.status(200).json({

@@ -1,5 +1,6 @@
 // backend/src/services/AIService.ts
 import { ChatOpenAI } from "@langchain/openai";
+import { ChatAnthropic } from "@langchain/anthropic";
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { PromptTemplate } from "@langchain/core/prompts";
 import { StructuredOutputParser } from "langchain/output_parsers";
@@ -25,10 +26,13 @@ interface PullRequestReviewContext {
   isReReview?: boolean;
   reviewHistory?: any[];
   comments?: any[];
+  reviewToken?: string; // レビュートークンを追加
+  sourceCommentId?: number;
 }
 
 export class AIService {
-  private model: ChatOpenAI;
+  // private model: ChatOpenAI;
+  private model: ChatAnthropic;
   private outputParser: StringOutputParser;
   private feedbackService: FeedbackService;
   private submissionService: SubmissionService;
@@ -42,15 +46,22 @@ export class AIService {
     }
 
     // モデルの初期化
-    const modelName = process.env.OPENAI_MODEL || "gpt-4o";
+    // const modelName = process.env.OPENAI_MODEL || "gpt-4o";
+    // console.log(`OpenAIモデルを初期化します: ${modelName}`);
+    const modelName = "claude-3-7-sonnet-20250219";
     console.log(`OpenAIモデルを初期化します: ${modelName}`);
 
     try {
-      this.model = new ChatOpenAI({
+      // this.model = new ChatOpenAI({
+      //   modelName: modelName,
+      //   temperature: 0.1, // 一貫性のため低い温度を設定
+      //   openAIApiKey: process.env.OPENAI_API_KEY,
+      //   timeout: 120000, // タイムアウトを120秒に設定
+      // });
+      this.model = new ChatAnthropic({
         modelName: modelName,
         temperature: 0.1, // 一貫性のため低い温度を設定
-        openAIApiKey: process.env.OPENAI_API_KEY,
-        timeout: 120000, // タイムアウトを120秒に設定
+        anthropicApiKey: process.env.ANTHROPIC_API_KEY,
       });
     } catch (error) {
       console.error("OpenAIモデルの初期化に失敗しました:", error);
@@ -306,6 +317,9 @@ ${outputParser.getFormatInstructions()}
   /**
    * プルリクエストをレビュー（拡張版：レビュー履歴を考慮）
    */
+  /**
+   * プルリクエストをレビュー（拡張版：レビュー履歴を考慮）
+   */
   async reviewPullRequest(
     projectKey: string,
     repositoryName: string,
@@ -319,6 +333,7 @@ ${outputParser.getFormatInstructions()}
       code_snippet?: string;
       reference_url?: string;
       category?: FeedbackCategory;
+      review_token?: string; // レビュートークン追加
     }>
   > {
     console.log(
@@ -347,17 +362,19 @@ ${outputParser.getFormatInstructions()}
       if (typeof diffData === "string") {
         codeContent = diffData;
       } else {
-        // 複雑な差分データの場合は別の抽出方法を使用
-        // 簡略化のため、ダミーコードを使用
-        codeContent = `
-  // PR #${pullRequestId}: ${prDetails.summary}
-  // 変更内容の抽出サンプル
-  function sampleCode() {
-    console.log("This is a sample code extracted from PR");
-    return true;
-  }
-        `;
+        // 複雑な差分データの場合は抽出メソッドを使用
+        codeContent = this.extractCodeFromDiff(diffData);
+        console.log(
+          `PR差分からコードを抽出しました (${codeContent.length} 文字)`
+        );
       }
+
+      // レビュートークンの決定
+      // 既存のトークンがあればそれを使用、なければ新規生成
+      const reviewToken =
+        context?.reviewToken || `review-token-${pullRequestId}-${Date.now()}`;
+
+      console.log(`レビュートークン: ${reviewToken}`);
 
       // 過去のレビュー履歴などの収集（既存コード）
       let historyContext = "";
@@ -365,7 +382,8 @@ ${outputParser.getFormatInstructions()}
       let repoContext = "";
       // これらの収集ロジックは変更不要
 
-      // ===== 新しいアプローチ: 構造化出力パーサーの使用 =====
+      // ===== 出力パースロジックの改善 =====
+      // 構造化出力パーサーを定義
       const outputParser = StructuredOutputParser.fromZodSchema(
         z.array(
           z.object({
@@ -380,16 +398,15 @@ ${outputParser.getFormatInstructions()}
         )
       );
 
-      // LangChainのプロンプトテンプレートを使わず、生のOpenAIのリクエストを構築
+      // プロンプトフォーマットをより明確に
       const formatInstructions = outputParser.getFormatInstructions();
 
-      const reviewToken = `review-token-${pullRequestId}-${Date.now()}`;
-
-      // 以下、LangChainプロンプトテンプレートを使わずに直接OpenAIモデルを呼び出す方法
+      // 強化したプロンプト - JSON構造を理解しやすくするよう明示的に説明
       const messages = [
         {
           role: "system",
-          content: "あなたはプロフェッショナルなコードレビュアーです。",
+          content:
+            "あなたはプロフェッショナルなコードレビュアーです。次のコードをレビューし、指定された JSON 形式で結果を返してください。",
         },
         {
           role: "user",
@@ -428,14 +445,29 @@ ${outputParser.getFormatInstructions()}
     .join("\n")}
   
   # 評価方法
-  各評価基準について、以下の情報を含むフィードバックを生成してください：
-  1. カテゴリ: 該当する評価基準のカテゴリ
-  2. 問題点: 具体的な問題の説明（問題がない場合は遵守されている点を説明）
-  3. 改善提案: 問題の解決方法（問題がない場合は現状維持のアドバイス）
-  4. 優先度: high（重要）、medium（中程度）、low（軽微）
-  5. コードスニペット: 問題のある部分のコード（問題がない場合は省略可）
-  6. 参考URL: 関連するベストプラクティスなどへのリンク（任意）
-  7. 基準評価: コードがこの基準を満たしているかどうか（true/false）
+  以下の情報を含むフィードバックを JSON 配列形式で生成してください：
+  1. category: 該当する評価基準のカテゴリ (code_quality, security, performance, best_practice, readability, functionality, maintainability, architecture, other のいずれか)
+  2. problem_point: 具体的な問題の説明
+  3. suggestion: 問題の解決方法
+  4. priority: 優先度 (high, medium, low のいずれか)
+  5. code_snippet: 問題のある部分のコード (省略可)
+  6. reference_url: 関連するベストプラクティスへのリンク (省略可)
+  7. is_checked: コードがこの基準を満たしているかどうか (true/false)
+  
+  # 出力形式
+  必ず以下の JSON 配列形式で回答してください：
+  [
+    {
+      "category": "code_quality",
+      "problem_point": "問題の説明",
+      "suggestion": "改善提案",
+      "priority": "high",
+      "code_snippet": "問題のあるコード例",
+      "reference_url": "https://example.com/reference",
+      "is_checked": false
+    },
+    // 他の問題点も同様に列挙
+  ]
   
   # 注意事項
   - 各カテゴリから最低1つ以上のフィードバックを生成してください。
@@ -446,16 +478,17 @@ ${outputParser.getFormatInstructions()}
       ? "再レビューではより詳細かつ具体的なフィードバックを提供してください。"
       : "初回レビューでは基本的な問題点を優先してください。"
   }
-  - 「基準評価」は文字列ではなく真偽値（true/false）で返してください。
+  - is_checked は true/false の真偽値（文字列ではなく）で返してください。
     - true = コードがこの基準を満たしている（問題なし）
     - false = コードがこの基準を満たしていない（問題あり）
+  - 必ず有効な JSON 形式で返してください。コメントは含めないでください。
   
   ${historyContext}
   ${commentsContext}
   ${repoContext}
-
+  
   # 固有トークン
-      このレビューの固有識別トークン: ${reviewToken}
+  このレビューの固有識別トークン: ${reviewToken}
   
   # プルリクエストのコード内容
   \`\`\`
@@ -470,9 +503,10 @@ ${outputParser.getFormatInstructions()}
       // OpenAIモデルを直接呼び出す
       const result = await this.model.invoke(messages);
 
-      // 結果をパースする
+      // 結果をパースする - エラーハンドリングを強化
       let parsedResult;
       try {
+        // コンテンツを抽出（複数形式に対応）
         const resultText =
           typeof result.content === "string"
             ? result.content
@@ -483,14 +517,48 @@ ${outputParser.getFormatInstructions()}
                 )
                 .join("")
             : "";
-        // console.log("AIからの応答:", resultText);
-        parsedResult = await outputParser.parse(resultText);
+
+        console.log(
+          "AIからの応答の最初の200文字:",
+          resultText.substring(0, 200)
+        );
+
+        // JSON部分を抽出するための正規表現
+        const jsonMatch = resultText.match(/\[\s*\{.*\}\s*\]/s);
+        if (jsonMatch) {
+          console.log("JSONパターンが見つかりました、抽出を試みます");
+          try {
+            // JSON文字列を抽出してパース
+            parsedResult = JSON.parse(jsonMatch[0]);
+            console.log(
+              `JSONとして正常にパースされました: ${parsedResult.length}件のフィードバック`
+            );
+          } catch (jsonError) {
+            console.error("抽出されたJSONのパースに失敗しました:", jsonError);
+            throw jsonError;
+          }
+        } else {
+          // JSONが見つからない場合は直接パーサーで処理
+          console.log(
+            "JSONパターンが見つかりませんでした、パーサーで処理します"
+          );
+          parsedResult = await outputParser.parse(resultText);
+        }
       } catch (parseError) {
         console.error("出力パース中にエラーが発生しました:", parseError);
+        console.log(
+          "パースに失敗した出力:",
+          typeof result.content === "string"
+            ? result.content.substring(0, 500)
+            : "非文字列応答"
+        );
+
+        // フォールバック: 最低限のフィードバックを生成
         return [
           {
             problem_point: "レビュー結果のパース中にエラーが発生しました",
-            suggestion: "システム管理者に連絡してください",
+            suggestion:
+              "システム管理者に連絡してください。コードの詳細レビューは手動で行ってください。",
             priority: FeedbackPriority.MEDIUM,
             category: FeedbackCategory.OTHER,
           },
@@ -502,7 +570,7 @@ ${outputParser.getFormatInstructions()}
       );
 
       // 評価結果からフィードバック形式に変換
-      return parsedResult.map((item) => ({
+      return parsedResult.map((item: any) => ({
         problem_point: item.problem_point,
         suggestion: item.suggestion,
         priority: item.priority,
@@ -527,8 +595,131 @@ ${outputParser.getFormatInstructions()}
             "。システム管理者に連絡してください。",
           priority: FeedbackPriority.MEDIUM,
           category: FeedbackCategory.OTHER,
+          review_token:
+            context?.reviewToken || `review-token-error-${Date.now()}`,
         },
       ];
+    }
+  }
+
+  /**
+   * 差分データからコード内容を抽出
+   */
+  private extractCodeFromDiff(diffData: any): string {
+    console.log("差分データからコード内容を抽出します");
+
+    // デバッグ情報
+    console.log(`差分データの型: ${typeof diffData}`);
+    if (typeof diffData === "object") {
+      console.log(`差分データのキー: ${Object.keys(diffData).join(", ")}`);
+      if (diffData.changedFiles) {
+        console.log(`変更されたファイル数: ${diffData.changedFiles.length}`);
+      }
+    }
+
+    // 抽出情報を保持する文字列
+    let extractedCode = "";
+    let debugging = "";
+
+    try {
+      // PR情報を取得
+      if (diffData.pullRequest) {
+        const pr = diffData.pullRequest;
+        extractedCode += `// プルリクエスト #${pr.number}: ${pr.summary}\n`;
+        extractedCode += `// ブランチ: ${pr.branch}\n`;
+        extractedCode += `// ベース: ${pr.base}\n\n`;
+        debugging += `PR情報を取得しました: #${pr.number}\n`;
+      }
+
+      // changedFilesがある場合の処理
+      if (diffData.changedFiles && Array.isArray(diffData.changedFiles)) {
+        debugging += `${diffData.changedFiles.length} ファイルの変更を見つけました\n`;
+
+        // 各変更ファイルを処理
+        for (const file of diffData.changedFiles) {
+          if (file.filePath) {
+            extractedCode += `\n// ファイル: ${file.filePath}\n`;
+            debugging += `ファイルを処理: ${file.filePath} (状態: ${
+              file.status || "unknown"
+            })\n`;
+
+            // 差分があればそれを追加
+            if (file.diff) {
+              // 差分からコード部分を抽出（+で始まる行）
+              const diffLines = file.diff.split("\n");
+              const codeLines = diffLines
+                .filter(
+                  (line: string) =>
+                    line.startsWith("+") && !line.startsWith("+++")
+                )
+                .map((line: string) => line.substring(1));
+
+              if (codeLines.length > 0) {
+                extractedCode += `\`\`\`\n${codeLines.join("\n")}\n\`\`\`\n\n`;
+                debugging += `差分から${codeLines.length}行のコードを抽出しました\n`;
+              }
+            }
+
+            // コンテンツがあればそれも追加（削除ファイル以外）
+            if (file.content && file.status !== "deleted") {
+              // ファイルが大きすぎる場合は一部のみ
+              const contentSnippet =
+                file.content.length > 2000
+                  ? file.content.substring(0, 2000) + "\n// ... (省略) ..."
+                  : file.content;
+
+              if (!extractedCode.includes("```")) {
+                // 差分から抽出したコードがなければ
+                extractedCode += `\`\`\`\n${contentSnippet}\n\`\`\`\n\n`;
+                debugging += `ファイル内容から${contentSnippet.length}文字のコードを抽出しました\n`;
+              }
+            }
+          }
+        }
+      }
+
+      // 内容がない場合のフォールバック
+      if (
+        !extractedCode ||
+        extractedCode.trim() === "" ||
+        !extractedCode.includes("```")
+      ) {
+        // 最小限のフォールバックコード
+        extractedCode = `// プルリクエスト #${
+          diffData.pullRequest?.number || "?"
+        } の変更内容\n`;
+        extractedCode += `// 注意: 自動的に抽出できたコードが限られています。レビュー時に考慮してください。\n\n`;
+
+        // PRの詳細情報を追加
+        if (diffData.pullRequest) {
+          extractedCode += `// タイトル: ${diffData.pullRequest.summary}\n`;
+          if (diffData.pullRequest.description) {
+            extractedCode += `// 説明: ${diffData.pullRequest.description.substring(
+              0,
+              200
+            )}${diffData.pullRequest.description.length > 200 ? "..." : ""}\n`;
+          }
+        }
+
+        // ファイル名だけでも表示
+        if (diffData.changedFiles && Array.isArray(diffData.changedFiles)) {
+          extractedCode += `\n// 変更ファイル一覧:\n`;
+          diffData.changedFiles.forEach((file: any) => {
+            if (file.filePath) {
+              extractedCode += `// - ${file.filePath} (${
+                file.status || "unknown"
+              })\n`;
+            }
+          });
+        }
+      }
+
+      return extractedCode;
+    } catch (error) {
+      console.error("差分からコード抽出中にエラーが発生しました:", error);
+      return `// コード抽出エラー: ${
+        error instanceof Error ? error.message : String(error)
+      }\n// プルリクエストのコードを手動で確認してください。`;
     }
   }
 }

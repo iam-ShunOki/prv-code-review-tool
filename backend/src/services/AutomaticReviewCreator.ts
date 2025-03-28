@@ -32,6 +32,7 @@ interface ReviewContext {
   comments?: any[];
   existingReviewId?: number;
   sourceCommentId?: number;
+  reviewToken?: string;
 }
 
 export class AutomaticReviewCreator {
@@ -275,6 +276,8 @@ export class AutomaticReviewCreator {
               isReReview: context?.isReReview || false,
               reviewHistory: context?.reviewHistory || [],
               comments: context?.comments || [],
+              reviewToken: context?.reviewToken, // トークンを渡す
+              sourceCommentId: context?.sourceCommentId,
             }
           );
 
@@ -293,6 +296,7 @@ export class AutomaticReviewCreator {
               reference_url: feedback.reference_url,
               code_snippet: feedback.code_snippet,
               category: feedback.category,
+              // review_tokenは保存対象のプロパティにないので渡さない
             });
           }
 
@@ -303,15 +307,17 @@ export class AutomaticReviewCreator {
             SubmissionStatus.REVIEWED
           );
 
-          console.log(
-            `PR #${prData.number} のレビューが完了し、フィードバックを保存しました`
-          );
-
           // オプション: BacklogPRにコメントを送信
           try {
+            console.log(
+              `PR #${prData.number} へレビューフィードバックを送信します`
+            );
             const reviewFeedbackSender = new ReviewFeedbackSenderService();
             await reviewFeedbackSender.sendReviewFeedbackToPullRequest(
               review.id
+            );
+            console.log(
+              `PR #${prData.number} へのレビューフィードバック送信が完了しました`
             );
           } catch (sendError) {
             console.error(
@@ -433,14 +439,8 @@ export class AutomaticReviewCreator {
   private extractCodeFromDiff(diffData: any): string {
     console.log("差分データからコード内容を抽出します");
 
-    // デバッグ情報を追加
+    // デバッグ情報
     console.log(`差分データの型: ${typeof diffData}`);
-    if (typeof diffData === "object") {
-      console.log(`差分データのキー: ${Object.keys(diffData).join(", ")}`);
-      console.log(
-        `変更されたファイル: ${JSON.stringify(diffData.changedFiles)}`
-      );
-    }
 
     // すでに文字列の場合はそのまま返す
     if (typeof diffData === "string") {
@@ -450,91 +450,51 @@ export class AutomaticReviewCreator {
 
     // 差分情報を保持する文字列
     let extractedCode = "";
-    let debugging = "";
 
     try {
-      // PR情報を取得
-      if (diffData.pullRequest) {
-        const pr = diffData.pullRequest;
-        extractedCode += `// プルリクエスト #${pr.number}: ${pr.summary}\n`;
-        extractedCode += `// ブランチ: ${pr.branch}\n`;
-        extractedCode += `// ベース: ${pr.base}\n\n`;
-        debugging += `PR情報を取得しました: #${pr.number}\n`;
-      }
+      // changedFilesが存在する場合、その情報を使用
+      if (diffData.changedFiles && Array.isArray(diffData.changedFiles)) {
+        console.log(
+          `変更ファイル: ${diffData.changedFiles.length}個を処理します`
+        );
 
-      // コミット情報を処理
-      if (diffData.commits && Array.isArray(diffData.commits)) {
-        extractedCode += `// ${diffData.commits.length} コミットの変更内容\n\n`;
-        debugging += `${diffData.commits.length} コミットを見つけました\n`;
+        // 各変更ファイルからコードを抽出
+        for (const file of diffData.changedFiles) {
+          if (file.filePath) {
+            extractedCode += `\n// ファイル: ${file.filePath}\n`;
 
-        // 最大5件のコミットメッセージを表示
-        diffData.commits
-          .slice(0, 5)
-          .forEach((commit: { message: any }, index: number) => {
-            extractedCode += `// コミット ${index + 1}: ${commit.message}\n`;
-          });
-        extractedCode += "\n";
-      }
-
-      // diffData.diffsがなく、直接diffsが配列として渡されることもある
-      const diffsToProcess = Array.isArray(diffData)
-        ? diffData
-        : diffData.diffs && Array.isArray(diffData.diffs)
-        ? diffData.diffs
-        : null;
-
-      // CASE 1: ルート階層に直接diffs配列がある場合
-      if (Array.isArray(diffData)) {
-        debugging += `diffs配列を処理します (${diffData.length} 項目)\n`;
-        for (const diff of diffData) {
-          if (typeof diff === "object" && diff !== null) {
-            // ファイル情報の追加
-            if (diff.path) {
-              extractedCode += `\n// ファイル: ${diff.path}\n`;
-              debugging += `ファイルを見つけました: ${diff.path}\n`;
-            }
-
-            // hunksの処理
-            if (diff.hunks && Array.isArray(diff.hunks)) {
-              debugging += `${diff.hunks.length} ハンクを見つけました\n`;
-              for (const hunk of diff.hunks) {
-                if (hunk.content) {
-                  extractedCode += hunk.content + "\n";
-                  debugging += `ハンク内容を追加しました (${hunk.content.length} 文字)\n`;
-                } else if (hunk.lines && Array.isArray(hunk.lines)) {
-                  for (const line of hunk.lines) {
-                    extractedCode += line + "\n";
-                  }
-                  debugging += `ハンクから ${hunk.lines.length} 行を追加しました\n`;
+            // 追加された行や変更された行のみ抽出
+            if (file.diff) {
+              const lines = file.diff.split("\n");
+              for (const line of lines) {
+                // 追加された行だけを抽出 (+ で始まる行)
+                if (line.startsWith("+") && !line.startsWith("+++")) {
+                  // + を取り除いて追加
+                  extractedCode += line.substring(1) + "\n";
                 }
               }
+            } else if (file.content && file.status === "added") {
+              // 新規ファイルの場合はすべての内容を含める
+              extractedCode += file.content;
             }
           }
         }
-      }
-      // CASE 2: diffData.diffs配列がある場合
-      else if (diffData.diffs && Array.isArray(diffData.diffs)) {
-        debugging += `diffData.diffs を処理します (${diffData.diffs.length} 項目)\n`;
+      } else if (diffData.diffs && Array.isArray(diffData.diffs)) {
+        // バックアップ: 別の形式でdiffsが存在する場合
+        console.log(`diffデータを処理: ${diffData.diffs.length}件`);
 
-        for (const commitDiff of diffData.diffs) {
-          if (commitDiff.diffs && Array.isArray(commitDiff.diffs)) {
-            for (const fileDiff of commitDiff.diffs) {
-              if (fileDiff.path) {
-                extractedCode += `\n// ファイル: ${fileDiff.path}\n`;
-                debugging += `ファイルを見つけました: ${fileDiff.path}\n`;
-              }
+        for (const diff of diffData.diffs) {
+          if (diff.path) {
+            extractedCode += `\n// ファイル: ${diff.path}\n`;
 
-              if (fileDiff.hunks && Array.isArray(fileDiff.hunks)) {
-                debugging += `${fileDiff.hunks.length} ハンクを見つけました\n`;
-                for (const hunk of fileDiff.hunks) {
-                  if (hunk.content) {
-                    extractedCode += hunk.content + "\n";
-                    debugging += `ハンク内容を追加しました (${hunk.content.length} 文字)\n`;
-                  } else if (hunk.lines && Array.isArray(hunk.lines)) {
-                    for (const line of hunk.lines) {
-                      extractedCode += line + "\n";
+            if (diff.hunks && Array.isArray(diff.hunks)) {
+              for (const hunk of diff.hunks) {
+                if (hunk.lines && Array.isArray(hunk.lines)) {
+                  for (const line of hunk.lines) {
+                    // 追加された行だけを抽出
+                    if (line.startsWith("+") && !line.startsWith("+++")) {
+                      extractedCode += line.substring(1) + "\n";
                     }
-                    debugging += `ハンクから ${hunk.lines.length} 行を追加しました\n`;
                   }
                 }
               }
@@ -545,71 +505,24 @@ export class AutomaticReviewCreator {
 
       // 内容がない場合のフォールバック
       if (!extractedCode || extractedCode.trim() === "") {
-        extractedCode = `// プルリクエストの差分からコード内容を抽出できませんでした。\n`;
-        extractedCode += `// PRに変更されたコードがないか、APIの制限により取得できなかった可能性があります。\n`;
+        console.log("コード抽出に失敗しました。一般的な情報のみ返します");
+        extractedCode = `// プルリクエストからコードを抽出できませんでした。\n`;
 
         if (diffData.pullRequest) {
-          extractedCode += `\n// PRタイトル: ${diffData.pullRequest.summary}\n`;
-          extractedCode += `// PR説明: ${
+          extractedCode += `// PR: ${diffData.pullRequest.summary}\n`;
+          extractedCode += `// 説明: ${
             diffData.pullRequest.description || "説明なし"
           }\n`;
         }
-
-        // JSONダンプを追加してデバッグに役立てる
-        extractedCode += "\n// デバッグ情報開始\n";
-        extractedCode += "// " + debugging.replace(/\n/g, "\n// ");
-        try {
-          const diffStr = JSON.stringify(diffData).substring(0, 1000);
-          extractedCode += `\n// 差分データ (省略): ${diffStr}...\n`;
-        } catch (e) {
-          extractedCode += "\n// 差分データをJSON化できませんでした\n";
-        }
-        extractedCode += "// デバッグ情報終了\n";
       }
 
-      // ローカルデバッグ用のファイル出力（開発環境のみ）
-      if (process.env.NODE_ENV === "development") {
-        try {
-          const fs = require("fs");
-          const path = require("path");
-          const debugDir = path.join(__dirname, "../../temp/debug");
-
-          if (!fs.existsSync(debugDir)) {
-            fs.mkdirSync(debugDir, { recursive: true });
-          }
-
-          const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-          fs.writeFileSync(
-            path.join(debugDir, `extracted-code-${timestamp}.txt`),
-            extractedCode
-          );
-
-          console.log(`抽出したコードをデバッグファイルに保存しました`);
-        } catch (e) {
-          console.error("デバッグファイル保存エラー:", e);
-        }
-      }
+      console.log(`抽出したコードの長さ: ${extractedCode.length} 文字`);
+      return extractedCode;
     } catch (error) {
       console.error("差分からコード抽出中にエラーが発生しました:", error);
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
-      extractedCode = `// コード抽出エラー: ${errorMessage}\n`;
-      extractedCode += `// 生の差分データ: ${JSON.stringify(diffData).substring(
-        0,
-        1000
-      )}...\n`;
+      return `// コード抽出エラー: ${
+        error instanceof Error ? error.message : String(error)
+      }\n`;
     }
-
-    console.log(`抽出したコードの長さ: ${extractedCode.length} 文字`);
-
-    // 抽出したコードの一部をログに出力
-    const previewLength = Math.min(200, extractedCode.length);
-    console.log(
-      `抽出コードのプレビュー: ${extractedCode.substring(0, previewLength)}${
-        extractedCode.length > previewLength ? "..." : ""
-      }`
-    );
-
-    return extractedCode;
   }
 }

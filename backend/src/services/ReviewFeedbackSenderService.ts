@@ -141,12 +141,12 @@ export class ReviewFeedbackSenderService {
       // Backlogにコメントを送信
       try {
         console.log(`PR #${review.backlog_pr_id} にフィードバックを送信します`);
-        // await this.backlogService.addPullRequestComment(
-        //   review.backlog_project,
-        //   review.backlog_repository,
-        //   review.backlog_pr_id,
-        //   formattedFeedback
-        // );
+        await this.backlogService.addPullRequestComment(
+          review.backlog_project,
+          review.backlog_repository,
+          review.backlog_pr_id,
+          formattedFeedback
+        );
         // テスト段階なのでコメントを出力
         console.log(
           `#### テスト段階なので、コメントを出力します===================================================\n\n`
@@ -390,7 +390,7 @@ export class ReviewFeedbackSenderService {
   ): string {
     let markdown = "## AIコードレビュー結果（チェックリスト形式）\n\n";
 
-    // レビュー情報を追加（簡潔に）
+    // レビュー情報を追加
     markdown += `### レビュー情報\n`;
     markdown += `- PR: #${review.backlog_pr_id}\n`;
     markdown += `- レビュー日時: ${new Date().toLocaleString("ja-JP")}\n`;
@@ -405,9 +405,16 @@ export class ReviewFeedbackSenderService {
       markdown += "### 評価結果\n\n";
       markdown +=
         "このコードに重大な問題は見つかりませんでした。素晴らしいコードです！\n\n";
+
+      // レビュートークン追加
+      const reviewToken = `review-token-${review.id}-${new Date().getTime()}`;
+      markdown += `\n\n<!-- ${reviewToken} -->\n`;
+
       return markdown;
     }
 
+    // レビュートークンの生成または取得
+    // feedbacksの中にreview_tokenが含まれている場合はそれを使用
     const reviewToken =
       feedbacks.length > 0 && (feedbacks[0] as any).review_token
         ? (feedbacks[0] as any).review_token

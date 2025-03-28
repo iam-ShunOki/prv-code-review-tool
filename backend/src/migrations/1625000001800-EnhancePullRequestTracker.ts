@@ -27,7 +27,6 @@ export class EnhancePullRequestTracker1625000001800
 
   public async down(queryRunner: QueryRunner): Promise<void> {
     console.log("PullRequestTrackerテーブルの拡張を元に戻します");
-
     try {
       // 追加したカラムを削除
       await queryRunner.query(`
@@ -36,7 +35,6 @@ export class EnhancePullRequestTracker1625000001800
         DROP COLUMN last_review_at,
         DROP COLUMN review_history
       `);
-
       console.log("PullRequestTrackerテーブルの拡張を元に戻しました");
     } catch (error) {
       console.error(

@@ -47,8 +47,8 @@ export class ChatMessage {
   @CreateDateColumn()
   created_at: Date;
 
-  @UpdateDateColumn()
-  updated_at: Date;
+  // @UpdateDateColumn()
+  // updated_at: Date;
 
   // リレーションシップ
   @ManyToOne(() => User)

@@ -62,7 +62,7 @@ export class PullRequestMonitoringService {
                 const pullRequests = await this.backlogService.getPullRequests(
                   project.projectKey,
                   repo.name,
-                  "1"
+                  1
                 );
 
                 console.log(
@@ -115,108 +115,17 @@ export class PullRequestMonitoringService {
                         `PR #${pr.number} には @codereview メンションがあります。処理を開始します`
                       );
 
-                      // 処理済みかチェック - 効率的なSet検索
+                      // 処理済みかチェック
                       if (processedPrNumbers.has(pr.number)) {
                         console.log(
-                          `PR #${pr.number}は既に処理済みですが、再レビューを実行します`
+                          `PR #${pr.number}は既に処理済みです。このPRの最初の@codereviewは処理済みのためスキップします`
                         );
+                        skipped++;
+                        continue; // 既に処理済みの場合はスキップ（修正箇所）
 
-                        // トラッカー情報を取得
-                        const tracker = trackers.find(
-                          (t) => t.pull_request_id === pr.number
-                        );
-
-                        // 既存のレビューを確認
-                        const existingReview =
-                          await this.reviewRepository.findOne({
-                            where: {
-                              backlog_pr_id: pr.number,
-                              backlog_project: project.projectKey,
-                              backlog_repository: repo.name,
-                            },
-                          });
-
-                        if (existingReview) {
-                          // プルリクエストのコメント履歴を取得
-                          const comments =
-                            await this.backlogService.getPullRequestComments(
-                              project.projectKey,
-                              repo.name,
-                              pr.number
-                            );
-
-                          // レビュー履歴を取得
-                          const reviewHistory = tracker?.review_history
-                            ? JSON.parse(tracker.review_history)
-                            : [];
-
-                          // 再レビュー実行
-                          await this.automaticReviewCreator.createReviewFromPullRequest(
-                            {
-                              id: pr.id,
-                              project: project.projectKey,
-                              repository: repo.name,
-                              number: pr.number,
-                              summary: pr.summary,
-                              description: prDetails.description || "",
-                              base: pr.base,
-                              branch: pr.branch,
-                              authorId: pr.createdUser?.id,
-                              authorName: pr.createdUser?.name,
-                              authorMailAddress:
-                                pr.createdUser?.mailAddress || null,
-                            },
-                            {
-                              isReReview: true,
-                              reviewHistory: reviewHistory,
-                              comments: comments,
-                              existingReviewId: existingReview.id,
-                            }
-                          );
-
-                          // トラッカーを更新（レビュー回数を増やす）
-                          await this.markPullRequestAsProcessed(
-                            project.projectKey,
-                            repo.name,
-                            pr.number,
-                            existingReview.id,
-                            comments
-                          );
-
-                          processed++;
-                        } else {
-                          console.log(
-                            `PR #${pr.number} のレビューが見つかりません。新規作成します`
-                          );
-
-                          // 新規レビュー作成
-                          await this.automaticReviewCreator.createReviewFromPullRequest(
-                            {
-                              id: pr.id,
-                              project: project.projectKey,
-                              repository: repo.name,
-                              number: pr.number,
-                              summary: pr.summary,
-                              description: prDetails.description || "",
-                              base: pr.base,
-                              branch: pr.branch,
-                              authorId: pr.createdUser?.id,
-                              authorName: pr.createdUser?.name,
-                              authorMailAddress:
-                                pr.createdUser?.mailAddress || null,
-                            }
-                          );
-
-                          // トラッカーを更新
-                          await this.markPullRequestAsProcessed(
-                            project.projectKey,
-                            repo.name,
-                            pr.number
-                          );
-
-                          processed++;
-                        }
+                        // 以下の再レビュー処理は不要なため削除または修正
                       } else {
+                        // 新規レビュー作成
                         try {
                           // 既存のレビューを確認
                           const existingReview =
@@ -343,24 +252,23 @@ export class PullRequestMonitoringService {
     );
 
     try {
-      // // 処理済みかチェック
-      // const isProcessed = await this.isAlreadyProcessed(
-      //   projectKey,
-      //   repoName,
-      //   pullRequestId
-      // );
-
-      // if (isProcessed) {
-      //   console.log(`PR #${pullRequestId} already processed, skipping`);
-      //   return false;
-      // }
-
       // PR詳細取得
       const pr = await this.backlogService.getPullRequestById(
         projectKey,
         repoName,
         pullRequestId
       );
+
+      // PRのステータスをチェック
+      if (
+        pr.status &&
+        (pr.status.name === "Closed" || pr.status.name === "Merged")
+      ) {
+        console.log(
+          `PR #${pullRequestId} は ${pr.status.name} 状態のためスキップします`
+        );
+        return false;
+      }
 
       // @codereviewメンションをチェック（コメントIDがない場合はPR説明文をチェック）
       if (!commentId) {
@@ -414,7 +322,36 @@ export class PullRequestMonitoringService {
 
       console.log(`既存のレビュー: \n\n${JSON.stringify(existingReview)}\n\n`);
 
-      // レビュー作成
+      // PR コメント履歴とレビュー履歴を取得
+      let comments = [];
+      let reviewHistory = [];
+
+      try {
+        // コメント履歴の取得
+        comments = await this.backlogService.getPullRequestComments(
+          projectKey,
+          repoName,
+          pullRequestId
+        );
+
+        // レビュー履歴の取得
+        if (tracker && tracker.review_history) {
+          try {
+            reviewHistory = JSON.parse(tracker.review_history);
+          } catch (parseError) {
+            console.warn(`レビュー履歴のパースエラー: ${parseError}`);
+            reviewHistory = [];
+          }
+        }
+
+        console.log(
+          `コメント履歴: ${comments.length}件, レビュー履歴: ${reviewHistory.length}件`
+        );
+      } catch (historyError) {
+        console.warn(`履歴取得エラー: ${historyError}`);
+      }
+
+      // レビュー作成 - 既存レビューがある場合は再レビューとして処理
       await this.automaticReviewCreator.createReviewFromPullRequest(
         {
           id: pr.id,
@@ -430,24 +367,30 @@ export class PullRequestMonitoringService {
           authorMailAddress: pr.createdUser?.mailAddress || null,
         },
         {
-          isReReview: false,
-          reviewHistory: [],
-          comments: [],
-          existingReviewId: undefined,
+          isReReview: existingReview !== null, // 既存レビューがあれば再レビュー
+          reviewHistory: reviewHistory,
+          comments: comments,
+          existingReviewId: existingReview?.id, // 既存レビューのIDを設定
           sourceCommentId: commentId,
         }
       );
 
-      // 処理済みとしてマーク
+      // 処理済みとしてマーク (コメントIDも渡す)
       await this.markPullRequestAsProcessed(
         projectKey,
         repoName,
-        pullRequestId
+        pullRequestId,
+        existingReview?.id,
+        comments,
+        commentId // コメントIDを追加
       );
 
       return true;
     } catch (error) {
-      console.error(`Error checking PR #${pullRequestId}:`, error);
+      console.error(
+        `PR #${pullRequestId} のチェック中にエラーが発生しました:`,
+        error
+      );
       throw error;
     }
   }
@@ -479,17 +422,21 @@ export class PullRequestMonitoringService {
     }
   }
 
-  // トラッカー更新メソッドも拡張
+  // トラッカー更新メソッド
   private async markPullRequestAsProcessed(
     projectKey: string,
     repoName: string,
     pullRequestId: number,
     reviewId?: number,
     comments?: any[],
-    processedCommentId?: number // 追加
+    processedCommentId?: number
   ): Promise<void> {
     try {
-      console.log(`PR #${pullRequestId} を処理済みとしてマークします`);
+      console.log(
+        `PR #${pullRequestId} を処理済みとしてマークします ${
+          processedCommentId ? `(コメントID: ${processedCommentId})` : ""
+        }`
+      );
 
       // 既存のトラッカーを確認
       const existingTracker = await this.pullRequestTrackerRepository.findOne({
@@ -547,6 +494,9 @@ export class PullRequestMonitoringService {
           !processedCommentIds.includes(processedCommentId)
         ) {
           processedCommentIds.push(processedCommentId);
+          console.log(
+            `コメントID ${processedCommentId} を処理済みリストに追加しました`
+          );
         }
 
         // トラッカーを更新
@@ -578,6 +528,12 @@ export class PullRequestMonitoringService {
         const processedCommentIds = processedCommentId
           ? [processedCommentId]
           : [];
+
+        if (processedCommentId) {
+          console.log(
+            `新規作成: コメントID ${processedCommentId} を処理済みリストに追加しました`
+          );
+        }
 
         const tracker = new PullRequestTracker();
         tracker.project_key = projectKey;

@@ -101,7 +101,7 @@ export class BacklogService {
   async getPullRequests(
     projectIdOrKey: string,
     repoIdOrName: string,
-    statusType: string = "open"
+    statusType: number = 1
   ) {
     try {
       // statusIdパラメータを使用せず、正しいパラメータを使用
@@ -112,7 +112,7 @@ export class BacklogService {
         {
           params: {
             apiKey: this.apiKey,
-            // statusId パラメータは無効なので削除
+            statusId: [statusType],
           },
         }
       );
@@ -123,7 +123,7 @@ export class BacklogService {
 
       // ステータスでのフィルタリングをコード内で行う
       let result = response.data;
-      if (statusType === "open") {
+      if (statusType === 1) {
         // APIから取得したデータをコード側でフィルタリング
         result = result.filter(
           (pr: any) => pr.status && pr.status.name === "Open"
