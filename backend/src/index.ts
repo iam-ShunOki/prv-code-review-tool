@@ -8,6 +8,8 @@ import { PullRequestMonitoringService } from "./services/PullRequestMonitoringSe
 import { WebhookUrlService } from "./services/WebhookUrlService";
 import { RepositoryWhitelistService } from "./services/RepositoryWhitelistService";
 import { ReviewFeedbackSenderService } from "./services/ReviewFeedbackSenderService";
+import { BacklogService } from "./services/BacklogService";
+import { MentionDetectionService } from "./services/MentionDetectionService";
 
 // 環境変数の読み込み
 dotenv.config();
@@ -65,73 +67,167 @@ app.use(morgan("dev"));
 async function initializePullRequestMonitoring() {
   try {
     console.log("=========================================");
-    console.log("Initializing pull request monitoring...");
+    console.log("プルリクエストモニタリングを初期化しています...");
     console.log("=========================================");
 
-    // ホワイトリストの初期化（先に実行）
+    // ホワイトリストの初期化
     const whitelistService = RepositoryWhitelistService.getInstance();
     await whitelistService.initialize();
 
     // WebhookUrl初期化
     const webhookUrlService = WebhookUrlService.getInstance();
     console.log(
-      `Current webhook base URL: ${webhookUrlService.getWebhookBaseUrl()}`
+      `現在のwebhookベースURL: ${webhookUrlService.getWebhookBaseUrl()}`
     );
     console.log(
-      `Backlog webhook endpoint: ${webhookUrlService.getWebhookUrl(
+      `Backlog webhookエンドポイント: ${webhookUrlService.getWebhookUrl(
         "/api/backlog/webhook"
       )}`
     );
 
-    // 5秒待機してから実行（他の初期化処理が完了するのを待つ）
-    console.log("Waiting 5 seconds before checking existing pull requests...");
-    await new Promise((resolve) => setTimeout(resolve, 5000));
+    // 既存プルリクエストの初回チェック
+    await checkAllPullRequests();
 
-    // プルリクエスト監視サービス初期化
-    const monitoringService = new PullRequestMonitoringService();
-
-    try {
-      await AppDataSource.initialize();
-      console.log("Database connection established");
-
-      // マイグレーションの実行（必要に応じて）
-      try {
-        await AppDataSource.runMigrations();
-        console.log("Database migrations applied successfully");
-      } catch (migrationError) {
-        console.error("Migration error:", migrationError);
-        // マイグレーションエラーでもサーバーは起動する
-      }
-    } catch (dbError) {
-      console.error("Database connection error:", dbError);
-      // データベース接続エラーでもサーバーは起動（機能制限付き）
-    }
-
-    // 既存プルリクエストのチェック
-    console.log("Starting check of existing pull requests...");
-    const result = await monitoringService.checkExistingPullRequests();
+    // 3分間隔での定期チェックの設定
+    const CHECK_INTERVAL_MS = 3 * 60 * 1000; // 3分
     console.log(
-      `Pull request check completed: processed ${result.processed} PRs, skipped ${result.skipped} PRs`
+      `プルリクエスト定期チェックを設定: ${CHECK_INTERVAL_MS / 60000}分間隔`
     );
 
-    // 15分ごとに未送信のレビューフィードバックを送信
-    console.log("Setting up feedback sender scheduler");
     setInterval(async () => {
       try {
-        const feedbackSender = new ReviewFeedbackSenderService();
-        const sendResult = await feedbackSender.sendPendingReviewFeedbacks();
         console.log(
-          `Feedback sender ran: ${sendResult.success} sent, ${sendResult.failed} failed, ${sendResult.skipped} skipped`
+          "定期チェック実行: プルリクエストの未処理@codereviewをスキャン中..."
         );
+        await checkAllPullRequests();
       } catch (error) {
-        console.error("Error in feedback sender scheduler:", error);
+        console.error("定期チェック処理中にエラーが発生しました:", error);
       }
-    }, 15 * 60 * 1000); // 15分ごと
+    }, CHECK_INTERVAL_MS);
 
-    console.log("Pull request monitoring initialization completed");
+    console.log("プルリクエストモニタリングの初期化が完了しました");
   } catch (error) {
-    console.error("Error initializing pull request monitoring:", error);
+    console.error(
+      "プルリクエストモニタリングの初期化中にエラーが発生しました:",
+      error
+    );
   }
+}
+
+/**
+ * 全プルリクエストのチェック実行関数
+ * ホワイトリストに含まれるリポジトリのオープンPRをスキャンし、
+ * 未処理の@codereviewメンションがあれば処理する
+ */
+async function checkAllPullRequests(): Promise<void> {
+  // スキャン開始時間を記録
+  const startTime = new Date();
+  console.log(`全プルリクエストスキャン開始: ${startTime.toISOString()}`);
+
+  let processed = 0;
+  let skipped = 0;
+
+  try {
+    // サービスの初期化
+    const whitelistService = RepositoryWhitelistService.getInstance();
+    const backlogService = new BacklogService();
+    const mentionDetectionService = new MentionDetectionService();
+    const monitoringService = new PullRequestMonitoringService();
+
+    // ホワイトリストからリポジトリを取得
+    const whitelist = await whitelistService.getWhitelist();
+
+    // 自動返信が許可されているリポジトリのみに絞り込み
+    const autoReplyRepos = whitelist.filter((repo) => repo.allowAutoReply);
+    console.log(`チェック対象リポジトリ: ${autoReplyRepos.length}件`);
+
+    // 各リポジトリに対して処理
+    for (const repo of autoReplyRepos) {
+      try {
+        // オープン状態のプルリクエスト一覧を取得
+        const pullRequests = await backlogService.getPullRequests(
+          repo.projectKey,
+          repo.repositoryName,
+          1 // オープン状態
+        );
+
+        if (pullRequests.length === 0) {
+          continue; // オープンPRがなければ次のリポジトリへ
+        }
+
+        console.log(
+          `リポジトリ ${repo.projectKey}/${repo.repositoryName}: ${pullRequests.length}件のオープンPR`
+        );
+
+        // 各PRをチェック
+        for (const pr of pullRequests) {
+          try {
+            // PRのコメントを取得
+            const comments = await backlogService.getPullRequestComments(
+              repo.projectKey,
+              repo.repositoryName,
+              pr.number
+            );
+
+            // @codereviewメンションがあるかチェック
+            const hasMentionInDescription =
+              pr.description &&
+              mentionDetectionService.detectCodeReviewMention(pr.description);
+
+            const commentsWithMention = comments.filter(
+              (comment) =>
+                comment.content &&
+                mentionDetectionService.detectCodeReviewMention(comment.content)
+            );
+
+            if (hasMentionInDescription || commentsWithMention.length > 0) {
+              // 処理実行
+              const result = await monitoringService.checkSinglePullRequest(
+                repo.projectKey,
+                repo.repositoryName,
+                pr.number
+              );
+
+              if (result) {
+                processed++;
+                console.log(
+                  `PR #${pr.number} (${repo.projectKey}/${repo.repositoryName}): レビュー実行済み`
+                );
+              } else {
+                skipped++;
+                console.log(
+                  `PR #${pr.number} (${repo.projectKey}/${repo.repositoryName}): スキップ (既に処理済み)`
+                );
+              }
+            }
+          } catch (prError) {
+            console.error(
+              `PR #${pr.number} (${repo.projectKey}/${repo.repositoryName}) の処理中にエラー:`,
+              prError
+            );
+            skipped++;
+          }
+        }
+      } catch (repoError) {
+        console.error(
+          `リポジトリ ${repo.projectKey}/${repo.repositoryName} の処理中にエラー:`,
+          repoError
+        );
+      }
+    }
+  } catch (error) {
+    console.error("プルリクエストスキャン中にエラーが発生しました:", error);
+  }
+
+  // 処理時間の計算
+  const endTime = new Date();
+  const durationMs = endTime.getTime() - startTime.getTime();
+
+  console.log(
+    `全プルリクエストスキャン完了: 処理=${processed}件, スキップ=${skipped}件, 所要時間=${
+      durationMs / 1000
+    }秒`
+  );
 }
 
 /**
@@ -142,18 +238,18 @@ async function startServer() {
     // データベース接続試行
     try {
       await AppDataSource.initialize();
-      console.log("Database connection established");
+      console.log("データベース接続確立");
 
       // マイグレーションの実行（必要に応じて）
       try {
         await AppDataSource.runMigrations();
-        console.log("Database migrations applied successfully");
+        console.log("データベースマイグレーションが正常に適用されました");
       } catch (migrationError) {
-        console.error("Migration error:", migrationError);
+        console.error("マイグレーションエラー:", migrationError);
         // マイグレーションエラーでもサーバーは起動する
       }
     } catch (dbError) {
-      console.error("Database connection error:", dbError);
+      console.error("データベース接続エラー:", dbError);
       // データベース接続エラーでもサーバーは起動（機能制限付き）
     }
 
@@ -161,36 +257,33 @@ async function startServer() {
     try {
       await initializeBasicData();
     } catch (initError) {
-      console.error("Data initialization error:", initError);
+      console.error("データ初期化エラー:", initError);
     }
 
     // リポジトリホワイトリストを初期化
     try {
       await RepositoryWhitelistService.getInstance().initialize();
-      console.log("Repository whitelist initialized");
+      console.log("リポジトリホワイトリストが初期化されました");
     } catch (whitelistError) {
-      console.error(
-        "Repository whitelist initialization error:",
-        whitelistError
-      );
+      console.error("リポジトリホワイトリスト初期化エラー:", whitelistError);
     }
 
     // サーバー起動
     app.listen(PORT, () => {
-      console.log(`Server started: http://localhost:${PORT}`);
+      console.log(`サーバー起動: http://localhost:${PORT}`);
 
       // サーバー起動後にバックグラウンドでプルリクエストモニタリングを初期化
       setTimeout(() => {
         initializePullRequestMonitoring().catch((error) => {
           console.error(
-            "Error in delayed pull request monitoring initialization:",
+            "遅延プルリクエストモニタリング初期化でエラーが発生しました:",
             error
           );
         });
       }, 2000);
     });
   } catch (error) {
-    console.error("Server startup error:", error);
+    console.error("サーバー起動エラー:", error);
     process.exit(1);
   }
 }

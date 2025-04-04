@@ -33,9 +33,13 @@ export class PullRequestTracker {
   @Column({ type: "text", nullable: true })
   review_history: string;
 
-  // コメントIDを追跡するための新フィールド（JSON形式で保存）
+  // コメントIDを追跡するためのフィールド
   @Column({ type: "text", nullable: true, default: "[]" })
   processed_comment_ids: string;
+
+  // 説明文の@codereviewが処理済みかを追跡する新規フィールド
+  @Column({ type: "boolean", default: false })
+  description_processed: boolean;
 
   @CreateDateColumn()
   created_at: Date;

@@ -11,7 +11,7 @@ import { FeedbackService } from "./FeedbackService";
 import { ReviewFeedbackSenderService } from "./ReviewFeedbackSenderService";
 import { SubmissionService } from "./SubmissionService";
 import { EntityManager, Repository } from "typeorm";
-
+import { RepositoryWhitelistService } from "./RepositoryWhitelistService";
 interface PullRequestData {
   id: number;
   project: string;
@@ -33,6 +33,9 @@ interface ReviewContext {
   existingReviewId?: number;
   sourceCommentId?: number;
   reviewToken?: string;
+  isDescriptionRequest?: boolean;
+  checklistProgress?: number;
+  previousFeedbacks?: any[];
 }
 
 export class AutomaticReviewCreator {
@@ -62,7 +65,7 @@ export class AutomaticReviewCreator {
         prData.repository
       }) からレビューを作成します ${
         context?.isReReview ? "【再レビュー】" : "【初回レビュー】"
-      }`
+      }${context?.isDescriptionRequest ? " 【説明文由来】" : ""}`
     );
 
     let tempRepoDir = "";
@@ -255,6 +258,9 @@ export class AutomaticReviewCreator {
         );
       }
 
+      // レビューIDを取得
+      const reviewId = review.id;
+
       // トランザクション完了後にAIレビューを実行
       if (submissionId) {
         try {
@@ -276,8 +282,9 @@ export class AutomaticReviewCreator {
               isReReview: context?.isReReview || false,
               reviewHistory: context?.reviewHistory || [],
               comments: context?.comments || [],
-              reviewToken: context?.reviewToken, // トークンを渡す
+              reviewToken: context?.reviewToken,
               sourceCommentId: context?.sourceCommentId,
+              isDescriptionRequest: context?.isDescriptionRequest, // 説明文由来かどうかを渡す
             }
           );
 
@@ -307,24 +314,51 @@ export class AutomaticReviewCreator {
             SubmissionStatus.REVIEWED
           );
 
-          // オプション: BacklogPRにコメントを送信
+          // 【改善部分】レビュー完了後、即時にBacklogへのフィードバック送信を実行
           try {
             console.log(
-              `PR #${prData.number} へレビューフィードバックを送信します`
+              `PR #${prData.number} へのフィードバックを即時送信します`
             );
-            const reviewFeedbackSender = new ReviewFeedbackSenderService();
-            await reviewFeedbackSender.sendReviewFeedbackToPullRequest(
-              review.id
-            );
-            console.log(
-              `PR #${prData.number} へのレビューフィードバック送信が完了しました`
-            );
+
+            // リポジトリがホワイトリストに登録され、自動返信が許可されているか確認
+            const whitelistService = RepositoryWhitelistService.getInstance();
+            const isAutoReplyAllowed =
+              await whitelistService.isAutoReplyAllowed(
+                prData.project,
+                prData.repository
+              );
+
+            if (!isAutoReplyAllowed) {
+              console.log(
+                `リポジトリ ${prData.project}/${prData.repository} は自動返信が許可されていないため送信をスキップします`
+              );
+            } else {
+              // フィードバック送信を実行
+              const reviewFeedbackSender = new ReviewFeedbackSenderService();
+              const result =
+                await reviewFeedbackSender.sendReviewFeedbackToPullRequest(
+                  reviewId,
+                  true // 強制送信フラグを有効化
+                );
+
+              if (result) {
+                console.log(
+                  `PR #${prData.number} へのフィードバック送信が完了しました`
+                );
+              } else {
+                console.error(
+                  `PR #${prData.number} へのフィードバック送信に失敗しました`
+                );
+                // エラーを発生させずに継続
+              }
+            }
           } catch (sendError) {
+            // 送信エラーの詳細ログを出力
             console.error(
               `PR #${prData.number} へのフィードバック送信中にエラーが発生しました:`,
               sendError
             );
-            // 送信エラーは無視して処理を継続
+            // エラーを発生させずに処理を継続
           }
         } catch (reviewError) {
           console.error(

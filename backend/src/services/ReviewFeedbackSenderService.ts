@@ -380,7 +380,7 @@ export class ReviewFeedbackSenderService {
   }
 
   /**
-   * フィードバックをマークダウン形式に整形（絵文字を使用しないバージョン）
+   * フィードバックをマークダウン形式に整形（チェックリスト強化版）
    */
   private formatFeedbacksAsMarkdown(
     feedbacks: Feedback[],
@@ -388,12 +388,18 @@ export class ReviewFeedbackSenderService {
     submission: CodeSubmission,
     checklistRate: { total: number; checked: number; rate: number }
   ): string {
+    // 再レビュー判定（バージョンが2以上）
+    const isReReview = submission.version > 1;
+
     let markdown = "## AIコードレビュー結果（チェックリスト形式）\n\n";
 
     // レビュー情報を追加
     markdown += `### レビュー情報\n`;
     markdown += `- PR: #${review.backlog_pr_id}\n`;
     markdown += `- レビュー日時: ${new Date().toLocaleString("ja-JP")}\n`;
+    if (isReReview) {
+      markdown += `- レビュー回数: ${submission.version}回目\n`;
+    }
 
     // チェックリストの進捗状況を追加
     markdown += `- チェックリスト進捗: ${checklistRate.checked}/${
@@ -414,7 +420,6 @@ export class ReviewFeedbackSenderService {
     }
 
     // レビュートークンの生成または取得
-    // feedbacksの中にreview_tokenが含まれている場合はそれを使用
     const reviewToken =
       feedbacks.length > 0 && (feedbacks[0] as any).review_token
         ? (feedbacks[0] as any).review_token
@@ -440,10 +445,21 @@ export class ReviewFeedbackSenderService {
 
     // サマリーセクション
     markdown += "### サマリー\n\n";
+    if (isReReview) {
+      markdown += `これは**${submission.version}回目のレビュー**です。前回からの進捗を確認します。\n\n`;
+    }
+
     markdown += `- 合計レビュー項目: ${feedbacks.length}件\n`;
+
+    // カテゴリ別の項目数とチェック状態
     Object.entries(categorizedFeedbacks).forEach(([category, items]) => {
       if (items.length > 0) {
-        markdown += `- ${category}: ${items.length}件\n`;
+        const checkedCount = items.filter((item) => item.is_checked).length;
+        const checkRate =
+          items.length > 0 ? (checkedCount / items.length) * 100 : 0;
+        markdown += `- ${category}: ${
+          items.length
+        }件 (${checkedCount}件完了 - ${checkRate.toFixed(1)}%)\n`;
       }
     });
     markdown += "\n";
@@ -452,7 +468,7 @@ export class ReviewFeedbackSenderService {
     if (checklistRate.total > 0) {
       markdown += "### チェックリスト進捗\n\n";
 
-      // プログレスバーの作成（絵文字を使わないバージョン）
+      // プログレスバーの作成
       const barLength = 20;
       const filledLength = Math.round((checklistRate.rate / 100) * barLength);
       const emptyLength = barLength - filledLength;
@@ -461,15 +477,27 @@ export class ReviewFeedbackSenderService {
 
       markdown += `[${progressBar}] ${checklistRate.rate.toFixed(1)}%\n\n`;
 
-      // 完了率に応じてメッセージを変更（絵文字なし）
+      // 完了率に応じてメッセージを変更
       if (checklistRate.rate === 100) {
-        markdown += "**[完了] すべてのチェックが完了しました！**\n\n";
+        markdown +=
+          "**[完了] すべてのチェックが完了しました！おめでとうございます！**\n\n";
       } else if (checklistRate.rate > 75) {
-        markdown += "**[もう少し] もう少しでチェックが完了します！**\n\n";
+        markdown +=
+          "**[もう少し] もう少しでチェックが完了します！残りの項目を確認しましょう。**\n\n";
       } else if (checklistRate.rate > 50) {
-        markdown += "**[進行中] チェックが進行中です。**\n\n";
+        markdown +=
+          "**[進行中] チェックが順調に進んでいます。引き続き対応をお願いします。**\n\n";
+      } else if (checklistRate.rate > 0) {
+        markdown +=
+          "**[開始] チェックを始めました。一つずつ対応していきましょう。**\n\n";
       } else {
-        markdown += "**[開始] チェックを開始しましょう！**\n\n";
+        markdown += "**[未着手] チェックリストの対応をお願いします。**\n\n";
+      }
+
+      // 再レビュー時には前回からの変化を表示
+      if (isReReview) {
+        markdown +=
+          "前回のレビューから改善を続けてください。チェックリストの各項目を確認し、修正が完了したら項目をチェックしてください。\n\n";
       }
     }
 
@@ -479,6 +507,21 @@ export class ReviewFeedbackSenderService {
         if (categoryFeedbacks.length === 0) return;
 
         markdown += `### ${category}のチェックリスト\n\n`;
+
+        // カテゴリ内のチェック完了率を計算
+        const checkedCount = categoryFeedbacks.filter(
+          (f) => f.is_checked
+        ).length;
+        const categoryCheckRate =
+          categoryFeedbacks.length > 0
+            ? (checkedCount / categoryFeedbacks.length) * 100
+            : 0;
+
+        if (categoryFeedbacks.length > 1) {
+          markdown += `${category}カテゴリの完了率: ${categoryCheckRate.toFixed(
+            1
+          )}% (${checkedCount}/${categoryFeedbacks.length})\n\n`;
+        }
 
         categoryFeedbacks.forEach((feedback, index) => {
           const checkStatus = feedback.is_checked ? "[x]" : "[ ]";
@@ -498,7 +541,7 @@ export class ReviewFeedbackSenderService {
             markdown += `   **参考**: [詳細情報](${feedback.reference_url})\n\n`;
           }
 
-          // チェック状態を表示（絵文字なし）
+          // チェック状態を表示
           if (feedback.is_checked) {
             markdown += `   **[確認済み]**`;
             if (feedback.checked_at) {
@@ -507,6 +550,9 @@ export class ReviewFeedbackSenderService {
             } else {
               markdown += `\n\n`;
             }
+          } else if (isReReview) {
+            // 再レビュー時は未チェック項目に対応を促す
+            markdown += `   **[要対応]** この項目はまだ解決していません。対応を完了したらチェックしてください。\n\n`;
           }
 
           markdown += "\n";
@@ -516,8 +562,15 @@ export class ReviewFeedbackSenderService {
 
     // フッター
     markdown += "---\n";
-    markdown +=
-      "このレビューはAIによって自動生成されました。チェックリストの各項目を確認し、修正が完了するまでAIによるレビューを続けてください。";
+
+    if (checklistRate.rate === 100) {
+      markdown +=
+        "おめでとうございます！すべてのチェックリスト項目が完了しました。コードの品質向上に取り組んでいただきありがとうございます。";
+    } else {
+      markdown +=
+        "このレビューはAIによって自動生成されました。チェックリストの各項目を確認し、修正が完了するまでAIによるレビューを続けてください。";
+    }
+
     markdown += `\n\n<!-- ${reviewToken} -->\n`;
 
     return markdown;

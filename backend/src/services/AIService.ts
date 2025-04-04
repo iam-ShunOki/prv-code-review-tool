@@ -28,6 +28,7 @@ interface PullRequestReviewContext {
   comments?: any[];
   reviewToken?: string; // レビュートークンを追加
   sourceCommentId?: number;
+  isDescriptionRequest?: boolean; // 説明文由来かどうかを追加
 }
 
 export class AIService {
@@ -315,10 +316,7 @@ ${outputParser.getFormatInstructions()}
   }
 
   /**
-   * プルリクエストをレビュー（拡張版：レビュー履歴を考慮）
-   */
-  /**
-   * プルリクエストをレビュー（拡張版：レビュー履歴を考慮）
+   * プルリクエストをレビュー（拡張版：レビュー履歴とチェックリスト状態を考慮）
    */
   async reviewPullRequest(
     projectKey: string,
@@ -333,13 +331,13 @@ ${outputParser.getFormatInstructions()}
       code_snippet?: string;
       reference_url?: string;
       category?: FeedbackCategory;
-      review_token?: string; // レビュートークン追加
+      review_token?: string;
     }>
   > {
     console.log(
       `PR #${pullRequestId} (${projectKey}/${repositoryName}) のレビューを開始します ${
         context?.isReReview ? "【再レビュー】" : "【初回レビュー】"
-      }`
+      }${context?.isDescriptionRequest ? " 【説明文由来】" : ""}`
     );
 
     try {
@@ -362,28 +360,129 @@ ${outputParser.getFormatInstructions()}
       if (typeof diffData === "string") {
         codeContent = diffData;
       } else {
-        // 複雑な差分データの場合は抽出メソッドを使用
         codeContent = this.extractCodeFromDiff(diffData);
-        console.log(
-          `PR差分からコードを抽出しました (${codeContent.length} 文字)`
-        );
       }
 
       // レビュートークンの決定
-      // 既存のトークンがあればそれを使用、なければ新規生成
       const reviewToken =
         context?.reviewToken || `review-token-${pullRequestId}-${Date.now()}`;
 
-      console.log(`レビュートークン: ${reviewToken}`);
-
-      // 過去のレビュー履歴などの収集（既存コード）
+      // 過去のレビュー履歴処理の改善
       let historyContext = "";
-      let commentsContext = "";
-      let repoContext = "";
-      // これらの収集ロジックは変更不要
+      let checkedItemsContext = "";
+      let pendingItemsContext = "";
 
-      // ===== 出力パースロジックの改善 =====
-      // 構造化出力パーサーを定義
+      // 前回のレビュー情報から既に解決済みの項目と未解決の項目を抽出
+      if (
+        context?.isReReview &&
+        context.reviewHistory &&
+        context.reviewHistory.length > 0
+      ) {
+        console.log(
+          `過去のレビューデータを分析: ${context.reviewHistory.length}件のレビュー履歴`
+        );
+
+        // 前回のレビューIDを取得
+        const lastReviewEntry =
+          context.reviewHistory[context.reviewHistory.length - 1];
+        const lastReviewId = lastReviewEntry?.review_id;
+
+        if (lastReviewId) {
+          try {
+            // 前回のフィードバックとチェック状態を取得
+            const submissionService = new SubmissionService();
+            const lastSubmission =
+              await submissionService.getLatestSubmissionByReviewId(
+                lastReviewId
+              );
+
+            if (lastSubmission) {
+              const feedbackService = new FeedbackService();
+              const previousFeedbacks =
+                await feedbackService.getFeedbacksBySubmissionId(
+                  lastSubmission.id
+                );
+
+              // チェック済み項目と未チェック項目を分類
+              const checkedItems = previousFeedbacks.filter(
+                (f) => f.is_checked
+              );
+              const pendingItems = previousFeedbacks.filter(
+                (f) => !f.is_checked
+              );
+
+              console.log(
+                `前回のフィードバック: 合計=${previousFeedbacks.length}, チェック済=${checkedItems.length}, 未チェック=${pendingItems.length}`
+              );
+
+              // チェック済み項目の情報を構築
+              if (checkedItems.length > 0) {
+                checkedItemsContext = "## 前回のレビューで解決済みの項目\n\n";
+                checkedItems.forEach((item, index) => {
+                  checkedItemsContext += `${index + 1}. **${
+                    item.problem_point
+                  }**\n`;
+                  if (item.category) {
+                    checkedItemsContext += `   カテゴリ: ${this.getCategoryDisplayName(
+                      item.category
+                    )}\n`;
+                  }
+                  checkedItemsContext += `   解決方法: ${item.suggestion}\n\n`;
+                });
+              }
+
+              // 未解決項目の情報を構築
+              if (pendingItems.length > 0) {
+                pendingItemsContext = "## 前回のレビューで未解決の項目\n\n";
+                pendingItems.forEach((item, index) => {
+                  pendingItemsContext += `${index + 1}. **${
+                    item.problem_point
+                  }**\n`;
+                  if (item.category) {
+                    pendingItemsContext += `   カテゴリ: ${this.getCategoryDisplayName(
+                      item.category
+                    )}\n`;
+                  }
+                  pendingItemsContext += `   提案: ${item.suggestion}\n`;
+                  if (item.code_snippet) {
+                    pendingItemsContext += `   コード: \`\`\`\n${item.code_snippet}\n\`\`\`\n`;
+                  }
+                  pendingItemsContext += "\n";
+                });
+              }
+
+              // 総合的な進捗情報
+              historyContext = `# レビュー進捗情報\n\n`;
+              historyContext += `これまでに ${context.reviewHistory.length} 回のレビューが行われています。\n`;
+              historyContext += `前回のレビューでは ${
+                previousFeedbacks.length
+              } 件の項目があり、そのうち ${
+                checkedItems.length
+              } 件が解決済みです (${(
+                (checkedItems.length / previousFeedbacks.length) *
+                100
+              ).toFixed(1)}%)。\n\n`;
+
+              if (checkedItems.length > 0) {
+                historyContext += checkedItemsContext + "\n";
+              }
+
+              if (pendingItems.length > 0) {
+                historyContext += pendingItemsContext + "\n";
+              }
+
+              historyContext +=
+                "これらの情報を踏まえ、特に未解決の問題に注目したレビューを行い、以前の解決済み項目が確実に修正されているか確認してください。\n\n";
+            }
+          } catch (error) {
+            console.error(`前回のフィードバック取得エラー:`, error);
+            historyContext =
+              "前回のレビュー情報の取得に失敗しました。初回レビューとして処理します。\n\n";
+          }
+        }
+      }
+
+      // プロンプトフォーマットをより明確に
       const outputParser = StructuredOutputParser.fromZodSchema(
         z.array(
           z.object({
@@ -398,10 +497,9 @@ ${outputParser.getFormatInstructions()}
         )
       );
 
-      // プロンプトフォーマットをより明確に
       const formatInstructions = outputParser.getFormatInstructions();
 
-      // 強化したプロンプト - JSON構造を理解しやすくするよう明示的に説明
+      // 強化したプロンプト
       const messages = [
         {
           role: "system",
@@ -412,91 +510,89 @@ ${outputParser.getFormatInstructions()}
           role: "user",
           content: `以下のプルリクエストをレビューし、詳細かつ具体的なフィードバックを生成してください。
           
-  # プルリクエスト情報
-  - PR番号: #${pullRequestId}
-  - プロジェクト: ${projectKey}
-  - リポジトリ: ${repositoryName}
-  - タイトル: ${prDetails.summary}
-  - 説明: ${prDetails.description || "説明なし"}
-  - ベースブランチ: ${prDetails.base}
-  - 作成ブランチ: ${prDetails.branch}
-  
-  ${
-    context?.isReReview
-      ? `
-  # 再レビュー指示
-  このプルリクエストは以前にもレビューされています。以下の点に注意してください：
-  1. 前回のレビューで指摘された問題が解決されているか確認してください
-  2. 新しく追加された問題がないか確認してください
-  3. 改善された部分については肯定的なフィードバックを提供してください
-  4. 繰り返し指摘されている問題については、優先度を高くしてください
-  `
-      : ""
-  }
-  
-  # 評価基準
-  ${Object.entries(CodeEvaluationCriteria)
-    .map(([category, criteria]) => {
-      return (
-        `\n## ${this.getCategoryDisplayName(category as FeedbackCategory)}\n` +
-        criteria.map((item, index) => `${index + 1}. ${item}`).join("\n")
-      );
-    })
-    .join("\n")}
-  
-  # 評価方法
-  以下の情報を含むフィードバックを JSON 配列形式で生成してください：
-  1. category: 該当する評価基準のカテゴリ (code_quality, security, performance, best_practice, readability, functionality, maintainability, architecture, other のいずれか)
-  2. problem_point: 具体的な問題の説明
-  3. suggestion: 問題の解決方法
-  4. priority: 優先度 (high, medium, low のいずれか)
-  5. code_snippet: 問題のある部分のコード (省略可)
-  6. reference_url: 関連するベストプラクティスへのリンク (省略可)
-  7. is_checked: コードがこの基準を満たしているかどうか (true/false)
-  
-  # 出力形式
-  必ず以下の JSON 配列形式で回答してください：
-  [
-    {
-      "category": "code_quality",
-      "problem_point": "問題の説明",
-      "suggestion": "改善提案",
-      "priority": "high",
-      "code_snippet": "問題のあるコード例",
-      "reference_url": "https://example.com/reference",
-      "is_checked": false
-    },
-    // 他の問題点も同様に列挙
-  ]
-  
-  # 注意事項
-  - 各カテゴリから最低1つ以上のフィードバックを生成してください。
-  - 一般的なプログラミングのベストプラクティスに基づいて評価してください。
-  - 具体的で実用的なフィードバックを心がけてください。
-  - ${
-    context?.isReReview
-      ? "再レビューではより詳細かつ具体的なフィードバックを提供してください。"
-      : "初回レビューでは基本的な問題点を優先してください。"
-  }
-  - is_checked は true/false の真偽値（文字列ではなく）で返してください。
-    - true = コードがこの基準を満たしている（問題なし）
-    - false = コードがこの基準を満たしていない（問題あり）
-  - 必ず有効な JSON 形式で返してください。コメントは含めないでください。
-  
-  ${historyContext}
-  ${commentsContext}
-  ${repoContext}
-  
-  # 固有トークン
-  このレビューの固有識別トークン: ${reviewToken}
-  
-  # プルリクエストのコード内容
-  \`\`\`
-  ${codeContent}
-  \`\`\`
-  
-  ${formatInstructions}
-  `,
+# プルリクエスト情報
+- PR番号: #${pullRequestId}
+- プロジェクト: ${projectKey}
+- リポジトリ: ${repositoryName}
+- タイトル: ${prDetails.summary}
+- 説明: ${prDetails.description || "説明なし"}
+- ベースブランチ: ${prDetails.base}
+- 作成ブランチ: ${prDetails.branch}
+
+${
+  context?.isReReview
+    ? `
+# 再レビュー指示
+このプルリクエストは以前にもレビューされています。以下の点に注意してください：
+1. 前回のレビューで指摘された問題が解決されているか確認してください
+2. 特に未解決とマークされている項目に注目してください
+3. 改善された部分については肯定的なフィードバックを提供してください
+4. 繰り返し指摘されている問題については、優先度を高くしてください
+
+${historyContext}
+`
+    : ""
+}
+
+# 評価基準
+${Object.entries(CodeEvaluationCriteria)
+  .map(([category, criteria]) => {
+    return (
+      `\n## ${this.getCategoryDisplayName(category as FeedbackCategory)}\n` +
+      criteria.map((item, index) => `${index + 1}. ${item}`).join("\n")
+    );
+  })
+  .join("\n")}
+
+# 評価方法
+以下の情報を含むフィードバックを JSON 配列形式で生成してください：
+1. category: 該当する評価基準のカテゴリ (code_quality, security, performance, best_practice, readability, functionality, maintainability, architecture, other のいずれか)
+2. problem_point: 具体的な問題の説明
+3. suggestion: 問題の解決方法
+4. priority: 優先度 (high, medium, low のいずれか)
+5. code_snippet: 問題のある部分のコード (省略可)
+6. reference_url: 関連するベストプラクティスへのリンク (省略可)
+7. is_checked: コードがこの基準を満たしているかどうか (true/false)
+
+# 出力形式
+必ず以下の JSON 配列形式で回答してください：
+[
+  {
+    "category": "code_quality",
+    "problem_point": "問題の説明",
+    "suggestion": "改善提案",
+    "priority": "high",
+    "code_snippet": "問題のあるコード例",
+    "reference_url": "https://example.com/reference",
+    "is_checked": false
+  },
+  // 他の問題点も同様に列挙
+]
+
+# 注意事項
+- 各カテゴリから最低1つ以上のフィードバックを生成してください。
+- 一般的なプログラミングのベストプラクティスに基づいて評価してください。
+- 具体的で実用的なフィードバックを心がけてください。
+- ${
+            context?.isReReview
+              ? "再レビューではより詳細かつ具体的なフィードバックを提供し、前回から解決された問題は適切に認識してください。"
+              : "初回レビューでは基本的な問題点を優先してください。"
+          }
+- is_checked は true/false の真偽値（文字列ではなく）で返してください。
+  - true = コードがこの基準を満たしている（問題なし）
+  - false = コードがこの基準を満たしていない（問題あり）
+- 必ず有効な JSON 形式で返してください。コメントは含めないでください。
+
+# 固有トークン
+このレビューの固有識別トークン: ${reviewToken}
+
+# プルリクエストのコード内容
+\`\`\`
+${codeContent}
+\`\`\`
+
+${formatInstructions}
+`,
         },
       ];
 

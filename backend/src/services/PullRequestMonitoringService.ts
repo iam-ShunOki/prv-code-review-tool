@@ -6,6 +6,9 @@ import { AppDataSource } from "../index";
 import { PullRequestTracker } from "../models/PullRequestTracker";
 import { Review } from "../models/Review";
 import { In, Repository } from "typeorm";
+import { SubmissionService } from "./SubmissionService";
+import { FeedbackService } from "./FeedbackService";
+import { Feedback } from "../models/Feedback";
 
 export class PullRequestMonitoringService {
   private backlogService: BacklogService;
@@ -237,7 +240,100 @@ export class PullRequestMonitoringService {
   }
 
   /**
+   * レビュー履歴からチェックリスト進捗情報を取得
+   */
+  private async getChecklistProgress(
+    projectKey: string,
+    repoName: string,
+    pullRequestId: number
+  ): Promise<{
+    reviewCount: number;
+    lastReviewId?: number;
+    checklistRate?: { total: number; checked: number; rate: number };
+    previousFeedbacks?: Feedback[];
+  }> {
+    try {
+      console.log(`PR #${pullRequestId} のチェックリスト進捗情報を取得します`);
+
+      // トラッカーを取得
+      const tracker = await this.pullRequestTrackerRepository.findOne({
+        where: {
+          project_key: projectKey,
+          repository_name: repoName,
+          pull_request_id: pullRequestId,
+        },
+      });
+
+      if (!tracker || !tracker.review_history) {
+        console.log(`PR #${pullRequestId} のレビュー履歴が見つかりません`);
+        return { reviewCount: 0 };
+      }
+
+      // レビュー履歴をパース
+      let reviewHistory: any[] = [];
+      try {
+        reviewHistory = JSON.parse(tracker.review_history);
+      } catch (e) {
+        console.error("レビュー履歴のパースに失敗しました:", e);
+        return { reviewCount: tracker.review_count || 0 };
+      }
+
+      if (reviewHistory.length === 0) {
+        return { reviewCount: 0 };
+      }
+
+      // 最新のレビューエントリを取得
+      const lastReviewEntry = reviewHistory[reviewHistory.length - 1];
+      const lastReviewId = lastReviewEntry?.review_id;
+
+      if (!lastReviewId) {
+        return { reviewCount: reviewHistory.length };
+      }
+
+      // 最新のレビューIDからフィードバック情報を取得
+      try {
+        // 最新の提出を取得
+        const submissionService = new SubmissionService();
+        const lastSubmission =
+          await submissionService.getLatestSubmissionByReviewId(lastReviewId);
+
+        if (!lastSubmission) {
+          return { reviewCount: reviewHistory.length, lastReviewId };
+        }
+
+        // フィードバックとチェックリスト状態を取得
+        const feedbackService = new FeedbackService();
+        const previousFeedbacks =
+          await feedbackService.getFeedbacksBySubmissionId(lastSubmission.id);
+        const checklistRate = await feedbackService.getChecklistRate(
+          lastSubmission.id
+        );
+
+        console.log(
+          `PR #${pullRequestId} のチェックリスト進捗: ${
+            checklistRate.checked
+          }/${checklistRate.total} (${checklistRate.rate.toFixed(1)}%)`
+        );
+
+        return {
+          reviewCount: reviewHistory.length,
+          lastReviewId,
+          checklistRate,
+          previousFeedbacks,
+        };
+      } catch (error) {
+        console.error(`フィードバック情報取得エラー:`, error);
+        return { reviewCount: reviewHistory.length, lastReviewId };
+      }
+    } catch (error) {
+      console.error(`チェックリスト進捗情報取得エラー:`, error);
+      return { reviewCount: 0 };
+    }
+  }
+
+  /**
    * 単一のプルリクエストをチェック（webhook用）
+   * 改善: PR説明文の@codereview重複処理を防止
    */
   async checkSinglePullRequest(
     projectKey: string,
@@ -270,22 +366,20 @@ export class PullRequestMonitoringService {
         return false;
       }
 
-      // @codereviewメンションをチェック（コメントIDがない場合はPR説明文をチェック）
-      if (!commentId) {
-        const hasMention = this.mentionDetectionService.detectCodeReviewMention(
-          pr.description || ""
-        );
+      // コメント履歴を取得
+      const comments = await this.backlogService.getPullRequestComments(
+        projectKey,
+        repoName,
+        pullRequestId,
+        { order: "asc" } // 古い順に取得して処理
+      );
 
-        if (!hasMention) {
-          console.log(
-            `PR #${pullRequestId} には @codereview メンションがないためスキップします`
-          );
-          return false;
-        }
-      }
+      console.log(
+        `PR #${pullRequestId} のコメント ${comments.length} 件を取得しました`
+      );
 
-      // トラッカーを取得
-      const tracker = await this.pullRequestTrackerRepository.findOne({
+      // トラッカーを取得または作成
+      let tracker = await this.pullRequestTrackerRepository.findOne({
         where: {
           project_key: projectKey,
           repository_name: repoName,
@@ -293,16 +387,73 @@ export class PullRequestMonitoringService {
         },
       });
 
-      console.log(`トラッカー: \n\n${JSON.stringify(tracker)}\n\n`);
+      if (!tracker) {
+        tracker = new PullRequestTracker();
+        tracker.project_key = projectKey;
+        tracker.repository_name = repoName;
+        tracker.pull_request_id = pullRequestId;
+        tracker.processed_at = new Date();
+        tracker.review_count = 0;
+        tracker.processed_comment_ids = "[]";
+        // 新規フィールド: 説明文処理済みフラグ
+        tracker.description_processed = false;
+        tracker = await this.pullRequestTrackerRepository.save(tracker);
+      }
 
-      // コメントIDが指定されている場合、そのコメントが既に処理済みかチェック
+      // 処理済みコメントID一覧を取得
+      let processedCommentIds: number[] = [];
+      try {
+        processedCommentIds = JSON.parse(tracker.processed_comment_ids || "[]");
+      } catch (e) {
+        console.error("処理済みコメントIDのパースに失敗しました:", e);
+        processedCommentIds = [];
+      }
+
+      console.log(`処理済みコメントID: ${processedCommentIds.join(", ")}`);
+
+      // @codereviewメンションのあるコメントをフィルタリング
+      const codeReviewComments = comments.filter((comment) =>
+        this.mentionDetectionService.detectCodeReviewMention(
+          comment.content || ""
+        )
+      );
+
+      console.log(
+        `@codereview メンションのあるコメント: ${codeReviewComments.length} 件`
+      );
+
+      // AIからのレスポンスコメントをフィルタリング
+      const aiResponseComments = comments.filter((comment) =>
+        (comment.content || "").includes("AIコードレビュー結果")
+      );
+
+      console.log(`AIレスポンスコメント: ${aiResponseComments.length} 件`);
+
+      // PR説明文のメンションチェック
+      const hasMentionInDescription =
+        pr.description &&
+        this.mentionDetectionService.detectCodeReviewMention(pr.description);
+
+      // 説明文チェック用の変数
+      let isDescriptionRequest = false;
+
+      // 特定のコメントIDが指定されている場合
       if (commentId) {
-        // 処理済みコメントIDリストを取得
-        const processedCommentIds = tracker
-          ? JSON.parse(tracker.processed_comment_ids || "[]")
-          : [];
+        // 指定されたコメントが@codereviewを含むか確認
+        const targetComment = comments.find((c) => c.id === commentId);
+        if (
+          !targetComment ||
+          !this.mentionDetectionService.detectCodeReviewMention(
+            targetComment.content || ""
+          )
+        ) {
+          console.log(
+            `コメントID ${commentId} に @codereview メンションがないためスキップします`
+          );
+          return false;
+        }
 
-        // 既に処理済みの場合はスキップ
+        // 既に処理済みか確認
         if (processedCommentIds.includes(commentId)) {
           console.log(
             `コメントID ${commentId} は既に処理済みのためスキップします`
@@ -310,6 +461,81 @@ export class PullRequestMonitoringService {
           return false;
         }
       }
+      // コメントIDが指定されていない場合（システム起動時や定期チェック時）
+      else {
+        // PR説明文に@codereviewがあり、まだ処理していない場合
+        if (hasMentionInDescription && !tracker.description_processed) {
+          console.log(
+            `PR #${pullRequestId} の説明文に未処理の @codereview メンションがあります`
+          );
+          isDescriptionRequest = true;
+        }
+        // それ以外の場合は@codereviewコメントとレスポンスの数を比較
+        else if (hasMentionInDescription && tracker.description_processed) {
+          console.log(
+            `PR #${pullRequestId} の説明文の @codereview は既に処理済みです`
+          );
+
+          // 未処理のコメント@codereviewがあるか確認
+          const unprocessedComments = codeReviewComments.filter(
+            (comment) => !processedCommentIds.includes(comment.id)
+          );
+
+          if (unprocessedComments.length === 0) {
+            console.log(
+              "未処理の @codereview コメントがないためスキップします"
+            );
+            return false;
+          }
+
+          // 最新の未処理コメントを選択
+          const latestComment =
+            unprocessedComments[unprocessedComments.length - 1];
+          commentId = latestComment.id;
+          console.log(
+            `最新の未処理コメントID ${commentId} に対するレビューを生成します`
+          );
+        }
+        // 説明文に@codereviewがなく、コメントのみの場合
+        else {
+          // 未処理の@codereviewコメントがあるか確認
+          const unprocessedComments = codeReviewComments.filter(
+            (comment) => !processedCommentIds.includes(comment.id)
+          );
+
+          if (unprocessedComments.length === 0) {
+            console.log(
+              "未処理の @codereview コメントがないためスキップします"
+            );
+            return false;
+          }
+
+          // 最新の未処理コメントを選択
+          const latestComment =
+            unprocessedComments[unprocessedComments.length - 1];
+          commentId = latestComment.id;
+          console.log(
+            `最新の未処理コメントID ${commentId} に対するレビューを生成します`
+          );
+        }
+      }
+
+      // チェックリスト進捗情報の取得
+      const progressInfo = await this.getChecklistProgress(
+        projectKey,
+        repoName,
+        pullRequestId
+      );
+
+      console.log(
+        `PR #${pullRequestId} のレビュー回数: ${progressInfo.reviewCount}${
+          progressInfo.checklistRate
+            ? `, チェックリスト進捗: ${progressInfo.checklistRate.rate.toFixed(
+                1
+              )}%`
+            : ""
+        }`
+      );
 
       // 既存のレビューを取得
       const existingReview = await this.reviewRepository.findOne({
@@ -320,44 +546,23 @@ export class PullRequestMonitoringService {
         },
       });
 
-      console.log(`既存のレビュー: \n\n${JSON.stringify(existingReview)}\n\n`);
-
-      // PR コメント履歴とレビュー履歴を取得
-      let comments = [];
+      // レビュー履歴とコメント履歴を構築
       let reviewHistory = [];
-
-      try {
-        // コメント履歴の取得
-        comments = await this.backlogService.getPullRequestComments(
-          projectKey,
-          repoName,
-          pullRequestId
-        );
-
-        // レビュー履歴の取得
-        if (tracker && tracker.review_history) {
-          try {
-            reviewHistory = JSON.parse(tracker.review_history);
-          } catch (parseError) {
-            console.warn(`レビュー履歴のパースエラー: ${parseError}`);
-            reviewHistory = [];
-          }
+      if (tracker && tracker.review_history) {
+        try {
+          reviewHistory = JSON.parse(tracker.review_history);
+        } catch (parseError) {
+          console.warn("レビュー履歴のパースエラー:", parseError);
         }
-
-        console.log(
-          `コメント履歴: ${comments.length}件, レビュー履歴: ${reviewHistory.length}件`
-        );
-      } catch (historyError) {
-        console.warn(`履歴取得エラー: ${historyError}`);
       }
 
-      // レビュー作成 - 既存レビューがある場合は再レビューとして処理
+      // レビュー作成および実行
       await this.automaticReviewCreator.createReviewFromPullRequest(
         {
           id: pr.id,
           project: projectKey,
           repository: repoName,
-          number: pr.number,
+          number: pullRequestId,
           summary: pr.summary,
           description: pr.description || "",
           base: pr.base,
@@ -367,22 +572,26 @@ export class PullRequestMonitoringService {
           authorMailAddress: pr.createdUser?.mailAddress || null,
         },
         {
-          isReReview: existingReview !== null, // 既存レビューがあれば再レビュー
+          isReReview: existingReview !== null,
           reviewHistory: reviewHistory,
           comments: comments,
-          existingReviewId: existingReview?.id, // 既存レビューのIDを設定
+          existingReviewId: existingReview?.id,
           sourceCommentId: commentId,
+          isDescriptionRequest: isDescriptionRequest,
+          checklistProgress: progressInfo.checklistRate?.rate || 0, // チェックリスト進捗情報を追加
+          previousFeedbacks: progressInfo.previousFeedbacks, // 前回のフィードバック情報を追加
         }
       );
 
-      // 処理済みとしてマーク (コメントIDも渡す)
+      // 処理済みとしてマーク
       await this.markPullRequestAsProcessed(
         projectKey,
         repoName,
         pullRequestId,
         existingReview?.id,
         comments,
-        commentId // コメントIDを追加
+        commentId,
+        isDescriptionRequest // 説明文処理フラグを渡す
       );
 
       return true;
@@ -422,20 +631,24 @@ export class PullRequestMonitoringService {
     }
   }
 
-  // トラッカー更新メソッド
+  /**
+   * プルリクエストを処理済みとしてマーク
+   * 改善: 説明文処理フラグを追加
+   */
   private async markPullRequestAsProcessed(
     projectKey: string,
     repoName: string,
     pullRequestId: number,
     reviewId?: number,
     comments?: any[],
-    processedCommentId?: number
+    processedCommentId?: number,
+    isDescriptionProcessed?: boolean // 新規パラメータ
   ): Promise<void> {
     try {
       console.log(
         `PR #${pullRequestId} を処理済みとしてマークします ${
           processedCommentId ? `(コメントID: ${processedCommentId})` : ""
-        }`
+        }${isDescriptionProcessed ? " (説明文処理)" : ""}`
       );
 
       // 既存のトラッカーを確認
@@ -473,6 +686,7 @@ export class PullRequestMonitoringService {
           date: now.toISOString(),
           comments_count: comments?.length || 0,
           comment_id: processedCommentId, // 処理したコメントIDを履歴に追加
+          is_description_request: isDescriptionProcessed, // 説明文からのリクエストかどうか
         });
 
         // 処理済みコメントIDリストを更新
@@ -507,6 +721,14 @@ export class PullRequestMonitoringService {
         existingTracker.processed_comment_ids =
           JSON.stringify(processedCommentIds);
 
+        // 説明文処理フラグを更新
+        if (isDescriptionProcessed) {
+          existingTracker.description_processed = true;
+          console.log(
+            `PR #${pullRequestId} の説明文を処理済みとしてマークしました`
+          );
+        }
+
         await this.pullRequestTrackerRepository.save(existingTracker);
         console.log(
           `PR #${pullRequestId} のトラッカーを更新しました。レビュー回数: ${existingTracker.review_count}`
@@ -519,7 +741,8 @@ export class PullRequestMonitoringService {
                 review_id: reviewId,
                 date: now.toISOString(),
                 comments_count: comments?.length || 0,
-                comment_id: processedCommentId, // 処理したコメントIDを履歴に追加
+                comment_id: processedCommentId,
+                is_description_request: isDescriptionProcessed,
               },
             ]
           : [];
@@ -544,6 +767,7 @@ export class PullRequestMonitoringService {
         tracker.review_count = 1;
         tracker.review_history = JSON.stringify(reviewHistory);
         tracker.processed_comment_ids = JSON.stringify(processedCommentIds);
+        tracker.description_processed = isDescriptionProcessed || false;
 
         const savedTracker = await this.pullRequestTrackerRepository.save(
           tracker

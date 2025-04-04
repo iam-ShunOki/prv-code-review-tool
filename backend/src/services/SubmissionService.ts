@@ -83,4 +83,40 @@ export class SubmissionService {
     await this.submissionRepository.update(id, { status });
     return this.getSubmissionById(id);
   }
+
+  /**
+   * レビューIDに紐づく最新のコード提出を取得
+   */
+  async getLatestSubmissionByReviewId(
+    reviewId: number
+  ): Promise<CodeSubmission | null> {
+    console.log(`レビューID ${reviewId} に紐づく最新のコード提出を取得します`);
+
+    try {
+      const submissions = await this.submissionRepository.find({
+        where: { review_id: reviewId },
+        order: { version: "DESC" },
+        take: 1,
+      });
+
+      if (submissions && submissions.length > 0) {
+        console.log(
+          `レビューID ${reviewId} の最新コード提出 #${submissions[0].id} (バージョン ${submissions[0].version}) を取得しました`
+        );
+        return submissions[0];
+      } else {
+        console.log(
+          `レビューID ${reviewId} に紐づくコード提出が見つかりませんでした`
+        );
+        return null;
+      }
+    } catch (error) {
+      console.error(`レビューID ${reviewId} のコード提出取得エラー:`, error);
+      throw new Error(
+        `コード提出の取得に失敗しました: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+  }
 }

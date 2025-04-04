@@ -41,6 +41,7 @@ import { CreateYearlyCriteriaSettings1625000001600 } from "./migrations/16250000
 import { AddParentMessageIdToChatMessages1625000001700 } from "./migrations/1625000001700-AddParentMessageIdToChatMessages";
 import { EnhancePullRequestTracker1625000001800 } from "./migrations/1625000001800-EnhancePullRequestTracker";
 import { AddProcessedCommentIds1625000001900 } from "./migrations/1625000001900-AddProcessedCommentIds";
+import { AddDescriptionProcessedToPullRequestTrackers1625000002000 } from "./migrations/1625000002000-AddDescriptionProcessedToPullRequestTrackers";
 // 環境変数の読み込み
 dotenv.config();
 
@@ -96,6 +97,7 @@ export const AppDataSource = new DataSource({
     AddParentMessageIdToChatMessages1625000001700,
     EnhancePullRequestTracker1625000001800,
     AddProcessedCommentIds1625000001900,
+    AddDescriptionProcessedToPullRequestTrackers1625000002000,
   ],
   subscribers: [],
 
