@@ -89,7 +89,7 @@ async function initializePullRequestMonitoring() {
     await checkAllPullRequests();
 
     // 3分間隔での定期チェックの設定
-    const CHECK_INTERVAL_MS = 1 * 60 * 1000; // 1分
+    const CHECK_INTERVAL_MS = 15 * 60 * 1000; // 15分
     console.log(
       `プルリクエスト定期チェックを設定: ${CHECK_INTERVAL_MS / 60000}分間隔`
     );
