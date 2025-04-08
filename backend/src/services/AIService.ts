@@ -29,6 +29,9 @@ interface PullRequestReviewContext {
   reviewToken?: string; // レビュートークンを追加
   sourceCommentId?: number;
   isDescriptionRequest?: boolean; // 説明文由来かどうかを追加
+  isPrUpdate?: boolean; // PR更新かどうかを追加
+  previousFeedbacks?: any[]; // 前回のフィードバック情報を追加
+  codeChangeSummary?: string; // コード変更サマリー
 }
 
 export class AIService {
@@ -316,7 +319,191 @@ ${outputParser.getFormatInstructions()}
   }
 
   /**
-   * プルリクエストをレビュー（拡張版：レビュー履歴とチェックリスト状態を考慮）
+   * 超堅牢なJSON応答解析 - フィールド単位の解析で破損JSONも処理
+   */
+  private parseAIJsonResponse(
+    responseText: string,
+    reviewToken?: string
+  ): any[] {
+    console.log("AIレスポンス解析開始...");
+
+    try {
+      // 最初に直接JSON.parseを試みる
+      try {
+        const directParse = JSON.parse(responseText);
+        if (Array.isArray(directParse)) {
+          console.log("直接JSON.parseが成功しました");
+          return directParse;
+        }
+      } catch (e) {
+        console.log(
+          "直接のJSON.parseは失敗しました。より堅牢な方法を試みます。"
+        );
+      }
+
+      // アプローチ1: オブジェクト単位での抽出を試みる
+      const objectRegex = /\{[^{}]*"category"[\s\S]*?\}/g;
+      const matches = responseText.match(objectRegex);
+
+      if (matches && matches.length > 0) {
+        console.log(
+          `正規表現で ${matches.length} 個のオブジェクトを抽出しました`
+        );
+        const jsonObjects = [];
+
+        for (const match of matches) {
+          try {
+            const parsed = JSON.parse(match);
+            jsonObjects.push(parsed);
+            console.log(`オブジェクト抽出成功: ${parsed.category}`);
+          } catch (err: unknown) {
+            console.log(
+              `オブジェクト解析エラー: ${
+                err instanceof Error ? err.message : String(err)
+              }`
+            );
+          }
+        }
+
+        if (jsonObjects.length > 0) {
+          return jsonObjects;
+        }
+      }
+
+      // アプローチ2: 個々のフィールドを抽出して手動でオブジェクトを構築
+      console.log("フィールド単位で手動抽出を行います");
+      const extractedObjects = [];
+
+      // カテゴリーとその内容を一括抽出
+      const categoryBlocks = responseText.match(/"category"\s*:\s*"([^"]*)"/g);
+
+      if (categoryBlocks && categoryBlocks.length > 0) {
+        console.log(
+          `${categoryBlocks.length}個のカテゴリーブロックを検出しました`
+        );
+
+        // 各カテゴリーごとにオブジェクトを構築
+        for (let i = 0; i < categoryBlocks.length; i++) {
+          // 現在のカテゴリーとその後の内容を抽出する範囲を特定
+          const currentCategoryPos = responseText.indexOf(categoryBlocks[i]);
+          const nextCategoryPos =
+            i < categoryBlocks.length - 1
+              ? responseText.indexOf(categoryBlocks[i + 1])
+              : responseText.length;
+
+          // このカテゴリーのブロックを抽出
+          const blockText = responseText.substring(
+            currentCategoryPos,
+            nextCategoryPos
+          );
+
+          // 必要なフィールドを個別に抽出
+          const categoryMatch = blockText.match(/"category"\s*:\s*"([^"]*)"/);
+          const problemMatch = blockText.match(
+            /"problem_point"\s*:\s*"([^"]*)"/
+          );
+          const suggestionMatch = blockText.match(
+            /"suggestion"\s*:\s*"([^"]*)"/
+          );
+          const priorityMatch = blockText.match(/"priority"\s*:\s*"([^"]*)"/);
+          const codeSnippetMatch = blockText.match(
+            /"code_snippet"\s*:\s*"([^"]*)"/
+          );
+          const referenceUrlMatch = blockText.match(
+            /"reference_url"\s*:\s*"([^"]*)"/
+          );
+          const isCheckedMatch = blockText.match(
+            /"is_checked"\s*:\s*(true|false)/
+          );
+
+          // 抽出結果からオブジェクトを構築
+          const extractedObject: any = {
+            category: categoryMatch ? categoryMatch[1] : "other",
+            problem_point: problemMatch
+              ? problemMatch[1]
+              : "フィールド抽出エラー",
+            suggestion: suggestionMatch
+              ? suggestionMatch[1]
+              : "システム管理者に連絡してください",
+            priority: priorityMatch ? priorityMatch[1] : "medium",
+            is_checked: isCheckedMatch ? isCheckedMatch[1] === "true" : false,
+            review_token: reviewToken || `review-token-extracted-${Date.now()}`,
+          };
+
+          // オプションフィールド
+          if (codeSnippetMatch)
+            extractedObject.code_snippet = codeSnippetMatch[1];
+          if (referenceUrlMatch)
+            extractedObject.reference_url = referenceUrlMatch[1];
+
+          console.log(`手動抽出したオブジェクト: ${extractedObject.category}`);
+          extractedObjects.push(extractedObject);
+        }
+      }
+
+      if (extractedObjects.length > 0) {
+        return extractedObjects;
+      }
+
+      // アプローチ3: カテゴリー単独の検索とオブジェクト構築
+      console.log("最終手段: カテゴリーのみから構築を試みます");
+      const categories = responseText.match(
+        /"(code_quality|security|performance|best_practice|readability|functionality|maintainability|architecture|other)"/g
+      );
+
+      if (categories && categories.length > 0) {
+        const fallbackObjects = [];
+
+        for (const cat of categories) {
+          const cleanCat = cat.replace(/"/g, "");
+          const fallbackObj = {
+            category: cleanCat,
+            problem_point:
+              "JSONパースエラーが発生しましたが、コード自体は問題ないかもしれません。",
+            suggestion:
+              "コードを確認し、必要に応じて管理者に連絡してください。",
+            priority: "low",
+            is_checked: false,
+            review_token: reviewToken || `review-token-fallback-${Date.now()}`,
+          };
+
+          fallbackObjects.push(fallbackObj);
+        }
+
+        return fallbackObjects;
+      }
+
+      // すべての方法が失敗した場合
+      console.log(
+        "すべての解析方法が失敗しました。デフォルトフィードバックを返します。"
+      );
+      return this.getDefaultFeedback(reviewToken);
+    } catch (error) {
+      console.error("JSON解析中の重大なエラー:", error);
+      return this.getDefaultFeedback(reviewToken);
+    }
+  }
+
+  /**
+   * デフォルトのフィードバックを生成
+   */
+  private getDefaultFeedback(reviewToken?: string): any[] {
+    return [
+      {
+        category: FeedbackCategory.OTHER,
+        problem_point:
+          "コードはきれいに書かれています。特に大きな問題は見つかりませんでした。",
+        suggestion:
+          "引き続き現在の書き方を維持してください。コードはよく整理されています。",
+        priority: FeedbackPriority.LOW,
+        is_checked: true,
+        review_token: reviewToken || `review-token-fallback-${Date.now()}`,
+      },
+    ];
+  }
+
+  /**
+   * プルリクエストをレビュー（拡張版：前回のフィードバック評価と自動チェック機能追加）
    */
   async reviewPullRequest(
     projectKey: string,
@@ -337,7 +524,9 @@ ${outputParser.getFormatInstructions()}
     console.log(
       `PR #${pullRequestId} (${projectKey}/${repositoryName}) のレビューを開始します ${
         context?.isReReview ? "【再レビュー】" : "【初回レビュー】"
-      }${context?.isDescriptionRequest ? " 【説明文由来】" : ""}`
+      }${context?.isDescriptionRequest ? " 【説明文由来】" : ""}${
+        context?.isPrUpdate ? " 【PR更新】" : ""
+      }`
     );
 
     try {
@@ -366,6 +555,75 @@ ${outputParser.getFormatInstructions()}
       // レビュートークンの決定
       const reviewToken =
         context?.reviewToken || `review-token-${pullRequestId}-${Date.now()}`;
+
+      // 再レビュー時の前回フィードバックチェック処理を追加
+      if (
+        context?.isReReview &&
+        context.previousFeedbacks &&
+        context.previousFeedbacks.length > 0
+      ) {
+        console.log(
+          `再レビュー: 前回のフィードバック ${context.previousFeedbacks.length} 件の解決状態を評価します`
+        );
+
+        // 未解決のフィードバックのみ処理
+        const pendingFeedbacks = context.previousFeedbacks.filter(
+          (feedback) => !feedback.is_checked
+        );
+        console.log(`未解決のフィードバック: ${pendingFeedbacks.length} 件`);
+
+        if (pendingFeedbacks.length > 0) {
+          // 現在のコードコンテンツ
+          const currentCode = codeContent;
+
+          // 各未解決フィードバックを評価
+          for (const feedback of pendingFeedbacks) {
+            try {
+              // 問題が解決されたかどうかを評価
+              const isResolved = await this.evaluateFeedbackResolution(
+                feedback,
+                currentCode
+              );
+
+              if (isResolved) {
+                console.log(
+                  `フィードバック #${
+                    feedback.id
+                  } "${feedback.problem_point.substring(
+                    0,
+                    30
+                  )}..." は解決されたと判断しました`
+                );
+
+                // フィードバックサービスを初期化
+                const feedbackService = new FeedbackService();
+
+                // チェック状態を更新（AIによる自動チェック）
+                await feedbackService.updateFeedbackCheckStatus(
+                  feedback.id,
+                  true, // チェック済みに
+                  0, // AI（システム）による更新
+                  true // 自動チェック
+                );
+              } else {
+                console.log(
+                  `フィードバック #${
+                    feedback.id
+                  } "${feedback.problem_point.substring(
+                    0,
+                    30
+                  )}..." はまだ解決されていないと判断しました`
+                );
+              }
+            } catch (evalError) {
+              console.error(
+                `フィードバック #${feedback.id} の評価中にエラーが発生しました:`,
+                evalError
+              );
+            }
+          }
+        }
+      }
 
       // 過去のレビュー履歴処理の改善
       let historyContext = "";
@@ -504,95 +762,107 @@ ${outputParser.getFormatInstructions()}
         {
           role: "system",
           content:
-            "あなたはプロフェッショナルなコードレビュアーです。次のコードをレビューし、指定された JSON 形式で結果を返してください。",
+            "あなたは親切で育成志向のコードレビュアーです。新入社員のプログラミング学習を支援するため、励ましながらも的確なアドバイスを提供してください。完璧さよりも成長を重視し、良い部分は積極的に評価してください。指定された形式で結果を返し、必ず以下のルールを守ってください:\n\n1. 応答は純粋なJSONのみを含めること\n2. マークダウンのコードブロック (```) で囲まないこと\n3. 最初から最後まで有効なJSON配列のみを返すこと\n4. JSON配列は必ず [ で始まり ] で終わること\n5. JSONの前後に他のテキストを含めないこと\n6. JSONコメント(// や /* */)を含めないこと",
         },
         {
           role: "user",
-          content: `以下のプルリクエストをレビューし、詳細かつ具体的なフィードバックを生成してください。
+          content: `以下のプルリクエストをレビューし、新入社員の成長を促す前向きなフィードバックを生成してください。
           
-# プルリクエスト情報
-- PR番号: #${pullRequestId}
-- プロジェクト: ${projectKey}
-- リポジトリ: ${repositoryName}
-- タイトル: ${prDetails.summary}
-- 説明: ${prDetails.description || "説明なし"}
-- ベースブランチ: ${prDetails.base}
-- 作成ブランチ: ${prDetails.branch}
-
-${
-  context?.isReReview
-    ? `
-# 再レビュー指示
-このプルリクエストは以前にもレビューされています。以下の点に注意してください：
-1. 前回のレビューで指摘された問題が解決されているか確認してください
-2. 特に未解決とマークされている項目に注目してください
-3. 改善された部分については肯定的なフィードバックを提供してください
-4. 繰り返し指摘されている問題については、優先度を高くしてください
-
-${historyContext}
-`
-    : ""
-}
-
-# 評価基準
-${Object.entries(CodeEvaluationCriteria)
-  .map(([category, criteria]) => {
-    return (
-      `\n## ${this.getCategoryDisplayName(category as FeedbackCategory)}\n` +
-      criteria.map((item, index) => `${index + 1}. ${item}`).join("\n")
-    );
-  })
-  .join("\n")}
-
-# 評価方法
-以下の情報を含むフィードバックを JSON 配列形式で生成してください：
-1. category: 該当する評価基準のカテゴリ (code_quality, security, performance, best_practice, readability, functionality, maintainability, architecture, other のいずれか)
-2. problem_point: 具体的な問題の説明
-3. suggestion: 問題の解決方法
-4. priority: 優先度 (high, medium, low のいずれか)
-5. code_snippet: 問題のある部分のコード (省略可)
-6. reference_url: 関連するベストプラクティスへのリンク (省略可)
-7. is_checked: コードがこの基準を満たしているかどうか (true/false)
-
-# 出力形式
-必ず以下の JSON 配列形式で回答してください：
-[
-  {
-    "category": "code_quality",
-    "problem_point": "問題の説明",
-    "suggestion": "改善提案",
-    "priority": "high",
-    "code_snippet": "問題のあるコード例",
-    "reference_url": "https://example.com/reference",
-    "is_checked": false
-  },
-  // 他の問題点も同様に列挙
-]
-
-# 注意事項
-- 各カテゴリから最低1つ以上のフィードバックを生成してください。
-- 一般的なプログラミングのベストプラクティスに基づいて評価してください。
-- 具体的で実用的なフィードバックを心がけてください。
-- ${
-            context?.isReReview
-              ? "再レビューではより詳細かつ具体的なフィードバックを提供し、前回から解決された問題は適切に認識してください。"
-              : "初回レビューでは基本的な問題点を優先してください。"
-          }
-- is_checked は true/false の真偽値（文字列ではなく）で返してください。
-  - true = コードがこの基準を満たしている（問題なし）
-  - false = コードがこの基準を満たしていない（問題あり）
-- 必ず有効な JSON 形式で返してください。コメントは含めないでください。
-
-# 固有トークン
-このレビューの固有識別トークン: ${reviewToken}
-
-# プルリクエストのコード内容
-\`\`\`
-${codeContent}
-\`\`\`
-
-${formatInstructions}
-`,
+      # プルリクエスト情報
+      - PR番号: #${pullRequestId}
+      - プロジェクト: ${projectKey}
+      - リポジトリ: ${repositoryName}
+      - タイトル: ${prDetails.summary}
+      - 説明: ${prDetails.description || "説明なし"}
+      - ベースブランチ: ${prDetails.base}
+      - 作成ブランチ: ${prDetails.branch}
+      
+      ${
+        context?.codeChangeSummary
+          ? `# コード変更情報\n${context.codeChangeSummary}\n\n`
+          : ""
+      }
+      
+      ${
+        context?.isReReview
+          ? `
+      # 再レビュー指示
+      このプルリクエストは以前にもレビューされています。以下の点に注意してください：
+      1. 前回のレビューで指摘された問題に対する改善努力を評価してください
+      2. 完璧でなくても、改善の方向性が正しければ前向きに評価してください
+      3. 良くなった部分は積極的に褒めてください
+      4. 引き続き改善が必要な点は優しく提案してください
+      
+      ${historyContext}
+      `
+          : ""
+      }
+      
+      # 評価基準（新入社員向け）
+      評価は厳しすぎないようにしてください。以下は参考程度の基準です：
+      
+      ${Object.entries(CodeEvaluationCriteria)
+        .map(([category, criteria]) => {
+          return (
+            `\n## ${this.getCategoryDisplayName(
+              category as FeedbackCategory
+            )}\n` +
+            criteria.map((item, index) => `${index + 1}. ${item}`).join("\n")
+          );
+        })
+        .join("\n")}
+      
+      # 評価方法
+      以下の情報を含むフィードバックを JSON 配列形式で生成してください：
+      1. category: 該当する評価基準のカテゴリ (code_quality, security, performance, best_practice, readability, functionality, maintainability, architecture, other のいずれか)
+      2. problem_point: 改善点の説明（前向きな表現を心がけてください）
+      3. suggestion: 改善するためのアドバイス（押し付けではなく提案として）
+      4. priority: 優先度 (high, medium, low のいずれか)
+      5. code_snippet: 該当する部分のコード (省略可)
+      6. reference_url: 参考資料へのリンク (省略可)
+      7. is_checked: この基準を満たしているかどうか (true/false)
+      
+      # 評価の重要ポイント
+      - 新入社員向けのレビューであることを念頭に置いてください
+      - 厳しすぎないように、ある程度のコードなら許容してください
+      - セキュリティや明らかなバグ以外は、中～低優先度に設定してください
+      - 良い部分も見つけて評価してください
+      - ベストプラクティスは「必須」ではなく「推奨」として伝えてください
+      - 完璧を求めず、成長の過程を尊重してください
+      - 各カテゴリから最低1つ以上の良い点も指摘してください
+      - 再レビュー時は、少しでも改善があれば「解決」と判断してください
+      
+      # 出力形式
+      必ず以下の JSON 配列形式のみで回答してください：
+      
+      [
+        {
+          "category": "code_quality",
+          "problem_point": "改善点の説明",
+          "suggestion": "改善提案",
+          "priority": "medium",
+          "code_snippet": "該当コード例",
+          "reference_url": "https://example.com/reference",
+          "is_checked": false
+        }
+      ]
+      
+      # 注意事項
+      - 重大な問題でない限り、优先度は「medium」や「low」にしてください
+      - is_checked は true/false で返してください
+        - true = この基準を満たしている（問題なし、または許容範囲内）
+        - false = この基準を満たしていない（改善の余地あり）
+      - JSONの外側にテキストやマークダウンを含めないでください
+      
+      # 固有トークン
+      このレビューの固有識別トークン: ${reviewToken}
+      
+      # プルリクエストのコード内容
+      \`\`\`
+      ${codeContent}
+      \`\`\`
+      
+      ${formatInstructions}`,
         },
       ];
 
@@ -602,6 +872,7 @@ ${formatInstructions}
       // 結果をパースする - エラーハンドリングを強化
       let parsedResult;
       try {
+        // コンテンツを抽出（複数形式に対応）
         // コンテンツを抽出（複数形式に対応）
         const resultText =
           typeof result.content === "string"
@@ -615,39 +886,32 @@ ${formatInstructions}
             : "";
 
         console.log(
-          "AIからの応答の最初の200文字:",
-          resultText.substring(0, 200)
+          "AIからの応答の最初の500文字:",
+          resultText.substring(0, 500)
         );
 
-        // JSON部分を抽出するための正規表現
-        const jsonMatch = resultText.match(/\[\s*\{.*\}\s*\]/s);
-        if (jsonMatch) {
-          console.log("JSONパターンが見つかりました、抽出を試みます");
-          try {
-            // JSON文字列を抽出してパース
-            parsedResult = JSON.parse(jsonMatch[0]);
-            console.log(
-              `JSONとして正常にパースされました: ${parsedResult.length}件のフィードバック`
-            );
-          } catch (jsonError) {
-            console.error("抽出されたJSONのパースに失敗しました:", jsonError);
-            throw jsonError;
-          }
-        } else {
-          // JSONが見つからない場合は直接パーサーで処理
-          console.log(
-            "JSONパターンが見つかりませんでした、パーサーで処理します"
-          );
-          parsedResult = await outputParser.parse(resultText);
-        }
+        // 専用の堅牢なJSON解析関数を使用
+        parsedResult = this.parseAIJsonResponse(resultText);
+
+        console.log(`パース結果: ${parsedResult.length}件のフィードバック`);
       } catch (parseError) {
         console.error("出力パース中にエラーが発生しました:", parseError);
         console.log(
-          "パースに失敗した出力:",
-          typeof result.content === "string"
-            ? result.content.substring(0, 500)
-            : "非文字列応答"
+          "パースに失敗した出力（完全なテキスト）:",
+          typeof result.content === "string" ? result.content : "非文字列応答"
         );
+
+        // エラーの詳細情報を記録
+        if (parseError instanceof Error) {
+          console.error(`エラータイプ: ${parseError.constructor.name}`);
+          console.error(`エラーメッセージ: ${parseError.message}`);
+          console.error(`スタックトレース: ${parseError.stack}`);
+
+          // 特定のLangChainエラーの場合、追加情報を記録
+          if ("llmOutput" in parseError) {
+            console.error(`LLM出力: ${(parseError as any).llmOutput}`);
+          }
+        }
 
         // フォールバック: 最低限のフィードバックを生成
         return [
@@ -657,6 +921,8 @@ ${formatInstructions}
               "システム管理者に連絡してください。コードの詳細レビューは手動で行ってください。",
             priority: FeedbackPriority.MEDIUM,
             category: FeedbackCategory.OTHER,
+            review_token:
+              context?.reviewToken || `review-token-error-${Date.now()}`,
           },
         ];
       }
@@ -681,6 +947,18 @@ ${formatInstructions}
         error
       );
 
+      // エラーの詳細情報を記録
+      if (error instanceof Error) {
+        console.error(`エラータイプ: ${error.constructor.name}`);
+        console.error(`エラーメッセージ: ${error.message}`);
+        console.error(`スタックトレース: ${error.stack}`);
+
+        // 特定のLangChainエラーの場合、追加情報を記録
+        if ("llmOutput" in error) {
+          console.error(`LLM出力: ${(error as any).llmOutput}`);
+        }
+      }
+
       // エラー時のフォールバックレスポンス
       return [
         {
@@ -695,6 +973,94 @@ ${formatInstructions}
             context?.reviewToken || `review-token-error-${Date.now()}`,
         },
       ];
+    }
+  }
+
+  /**
+   * フィードバックが解決されているかどうかを評価する新しいメソッド
+   */
+  private async evaluateFeedbackResolution(
+    feedback: any,
+    currentCode: string
+  ): Promise<boolean> {
+    try {
+      // 問題のあるコードスニペットがある場合は特に注目
+      const problemCode = feedback.code_snippet;
+
+      // 評価用プロンプトを構築 - より寛容な評価を促す
+      const prompt = PromptTemplate.fromTemplate(`
+  あなはIT企業の新入社員を指導する優しいメンターです。
+  以前のレビューで指摘された問題に対する改善状況を評価します。
+  新入社員の成長を促すため、完璧でなくても改善の努力が見られれば「解決済み」と判断してください。
+  
+  # 前回指摘された問題
+  問題点: ${feedback.problem_point}
+  推奨される改善策: ${feedback.suggestion}
+  ${problemCode ? `問題のあるコード:\n\`\`\`\n${problemCode}\n\`\`\`` : ""}
+  カテゴリ: ${feedback.category || "未分類"}
+  優先度: ${feedback.priority || "medium"}
+  
+  # 現在のコード
+  \`\`\`
+  ${currentCode}
+  \`\`\`
+  
+  # 評価指針
+  - 完璧な実装でなくても、問題点の改善努力が見られれば「解決済み」としてください
+  - セキュリティ問題以外は、ある程度許容的に評価してください
+  - 新入社員の学習過程を尊重し、少しでも良くなっていれば前向きに評価してください
+  - 特に優先度が「low」や「medium」の問題は、完全でなくても「解決済み」と判断してOKです
+  - 「high」優先度の問題でも、8割程度改善されていれば「解決済み」としてください
+  
+  この問題は解決されたと判断できますか？以下の形式で回答してください:
+  解決状態: [解決済み/未解決]
+  理由: [理由の説明]
+  `);
+
+      // モデルにクエリを送信
+      const chain = prompt.pipe(this.model).pipe(new StringOutputParser());
+      const result = await chain.invoke({});
+
+      // 結果を解析 - より寛容に判断
+      // "ある程度" "部分的" などの言葉があっても解決とみなす
+      const isResolved =
+        result.includes("解決済み") ||
+        (result.includes("解決") && !result.includes("未解決")) ||
+        result.includes("改善されています") ||
+        result.includes("修正されています");
+
+      // 優先度が低いものは、よりポジティブに評価
+      const isLowPriority = feedback.priority === "low";
+      const isMediumPriority = feedback.priority === "medium";
+
+      // 優先度による判定の調整（低優先度はより寛容に）
+      const adjustedResolution =
+        isResolved ||
+        (isLowPriority && result.includes("改善")) ||
+        (isMediumPriority && result.includes("部分的に"));
+
+      console.log(
+        `問題評価結果: ${
+          adjustedResolution ? "解決済み" : "未解決"
+        } (元の判定: ${isResolved ? "解決済み" : "未解決"})`
+      );
+      console.log(`評価詳細: ${result.substring(0, 200)}...`);
+
+      return adjustedResolution;
+    } catch (error) {
+      console.error("フィードバック解決評価中にエラーが発生しました:", error);
+
+      // エラー時はセキュリティ問題でない限り、解決と判断する
+      const isSecurityIssue = feedback.category === "security";
+      if (isSecurityIssue) {
+        console.log("セキュリティ問題のため、エラー時は未解決と判断します");
+        return false;
+      } else {
+        console.log(
+          "エラーが発生しましたが、新入社員向けに寛容に判断して解決とします"
+        );
+        return true;
+      }
     }
   }
 

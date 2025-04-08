@@ -36,6 +36,7 @@ interface ReviewContext {
   isDescriptionRequest?: boolean;
   checklistProgress?: number;
   previousFeedbacks?: any[];
+  isPrUpdate?: boolean;
 }
 
 export class AutomaticReviewCreator {
@@ -223,9 +224,24 @@ export class AutomaticReviewCreator {
             prData.project
           }/${prData.repository}) から自動作成されました。${
             context?.isReReview ? "【再レビュー】" : ""
-          }`;
+          }${context?.isPrUpdate ? "【PR更新検出】" : ""}`;
           submission.status = SubmissionStatus.SUBMITTED;
-          submission.version = 1;
+
+          // 再レビューの場合はバージョンを増やす
+          if (context?.isReReview) {
+            // 既存の最新バージョンを取得
+            const latestSubmission = await this.submissionRepository.findOne({
+              where: { review_id: review.id },
+              order: { version: "DESC" },
+            });
+
+            submission.version = latestSubmission
+              ? latestSubmission.version + 1
+              : 1;
+            console.log(`再レビュー: バージョン ${submission.version} を設定`);
+          } else {
+            submission.version = 1;
+          }
 
           // トランザクション内でコード提出を保存
           const savedSubmission = await manager.save(
@@ -273,7 +289,24 @@ export class AutomaticReviewCreator {
           // AIServiceを初期化
           const aiService = new AIService();
 
-          // プルリクエストレビューを実行（コンテキスト付き）
+          // 前回コードと現在コードの比較情報を追加
+          let codeChangeSummary = null;
+          if (context?.isReReview && context.previousFeedbacks) {
+            // 前回レビューのコード取得
+            const previousCode = await this.getPreviousSubmissionCode(
+              review.id
+            );
+
+            if (previousCode) {
+              // 簡易的な差分情報を生成
+              codeChangeSummary = `前回コードから ${
+                codeContent.length - previousCode.length
+              } 文字の変更があります`;
+              console.log(codeChangeSummary);
+            }
+          }
+
+          // プルリクエストレビューを実行（拡張コンテキスト付き）
           const reviewFeedbacks = await aiService.reviewPullRequest(
             prData.project,
             prData.repository,
@@ -284,7 +317,10 @@ export class AutomaticReviewCreator {
               comments: context?.comments || [],
               reviewToken: context?.reviewToken,
               sourceCommentId: context?.sourceCommentId,
-              isDescriptionRequest: context?.isDescriptionRequest, // 説明文由来かどうかを渡す
+              isDescriptionRequest: context?.isDescriptionRequest,
+              isPrUpdate: context?.isPrUpdate,
+              previousFeedbacks: context?.previousFeedbacks || [], // 前回のフィードバック情報を確実に渡す
+              codeChangeSummary: codeChangeSummary || undefined, // コード変更サマリーを追加
             }
           );
 
@@ -417,6 +453,33 @@ export class AutomaticReviewCreator {
   }
 
   /**
+   * 前回のコード提出内容を取得する新しいメソッド
+   */
+  private async getPreviousSubmissionCode(
+    reviewId: number
+  ): Promise<string | null> {
+    try {
+      // 最新から2番目の提出を取得
+      const submissions = await this.submissionRepository.find({
+        where: { review_id: reviewId },
+        order: { version: "DESC" },
+        take: 2,
+      });
+
+      if (submissions.length >= 2) {
+        // 2番目（前回）の提出
+        const previousSubmission = submissions[1];
+        return previousSubmission.code_content;
+      }
+
+      return null;
+    } catch (error) {
+      console.error(`前回コード取得エラー (レビューID: ${reviewId}):`, error);
+      return null;
+    }
+  }
+
+  /**
    * ユーザーを検索または作成
    */
   private async findOrCreateUser(prData: PullRequestData): Promise<User> {
@@ -473,84 +536,58 @@ export class AutomaticReviewCreator {
   private extractCodeFromDiff(diffData: any): string {
     console.log("差分データからコード内容を抽出します");
 
-    // デバッグ情報
-    console.log(`差分データの型: ${typeof diffData}`);
-
     // すでに文字列の場合はそのまま返す
     if (typeof diffData === "string") {
-      console.log(`文字列の差分データを受信しました (${diffData.length} 文字)`);
       return diffData;
     }
 
-    // 差分情報を保持する文字列
     let extractedCode = "";
+    const isFullCodeExtracted = diffData.isFullCodeExtracted === true;
+    console.log(
+      `全体コード抽出モード: ${isFullCodeExtracted ? "有効" : "無効"}`
+    );
 
     try {
-      // changedFilesが存在する場合、その情報を使用
-      if (diffData.changedFiles && Array.isArray(diffData.changedFiles)) {
-        console.log(
-          `変更ファイル: ${diffData.changedFiles.length}個を処理します`
-        );
+      // PR情報を追加
+      if (diffData.pullRequest) {
+        extractedCode += `// プルリクエスト #${diffData.pullRequest.number}: ${diffData.pullRequest.summary}\n`;
+        extractedCode += `// ブランチ: ${diffData.pullRequest.branch}\n`;
+        extractedCode += `// ベース: ${diffData.pullRequest.base}\n\n`;
+      }
 
-        // 各変更ファイルからコードを抽出
+      // 変更ファイルを処理
+      if (diffData.changedFiles && Array.isArray(diffData.changedFiles)) {
         for (const file of diffData.changedFiles) {
           if (file.filePath) {
             extractedCode += `\n// ファイル: ${file.filePath}\n`;
 
-            // 追加された行や変更された行のみ抽出
-            if (file.diff) {
+            // 全体コード抽出モードでfullContentがある場合はそれを優先使用
+            if (isFullCodeExtracted && file.fullContent) {
+              console.log(
+                `ファイル ${file.filePath} の全体コードを使用 (${file.fullContent.length} 文字)`
+              );
+              extractedCode += file.fullContent + "\n\n";
+            }
+            // 従来の差分抽出ロジック（フォールバック）
+            else if (file.diff) {
               const lines = file.diff.split("\n");
+              // 追加行のみ抽出（+で始まる行）
               for (const line of lines) {
-                // 追加された行だけを抽出 (+ で始まる行)
                 if (line.startsWith("+") && !line.startsWith("+++")) {
-                  // + を取り除いて追加
                   extractedCode += line.substring(1) + "\n";
                 }
               }
             } else if (file.content && file.status === "added") {
-              // 新規ファイルの場合はすべての内容を含める
-              extractedCode += file.content;
+              extractedCode += file.content + "\n\n";
             }
           }
-        }
-      } else if (diffData.diffs && Array.isArray(diffData.diffs)) {
-        // バックアップ: 別の形式でdiffsが存在する場合
-        console.log(`diffデータを処理: ${diffData.diffs.length}件`);
-
-        for (const diff of diffData.diffs) {
-          if (diff.path) {
-            extractedCode += `\n// ファイル: ${diff.path}\n`;
-
-            if (diff.hunks && Array.isArray(diff.hunks)) {
-              for (const hunk of diff.hunks) {
-                if (hunk.lines && Array.isArray(hunk.lines)) {
-                  for (const line of hunk.lines) {
-                    // 追加された行だけを抽出
-                    if (line.startsWith("+") && !line.startsWith("+++")) {
-                      extractedCode += line.substring(1) + "\n";
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-
-      // 内容がない場合のフォールバック
-      if (!extractedCode || extractedCode.trim() === "") {
-        console.log("コード抽出に失敗しました。一般的な情報のみ返します");
-        extractedCode = `// プルリクエストからコードを抽出できませんでした。\n`;
-
-        if (diffData.pullRequest) {
-          extractedCode += `// PR: ${diffData.pullRequest.summary}\n`;
-          extractedCode += `// 説明: ${
-            diffData.pullRequest.description || "説明なし"
-          }\n`;
         }
       }
 
       console.log(`抽出したコードの長さ: ${extractedCode.length} 文字`);
+      console.log(
+        `抽出モード: ${isFullCodeExtracted ? "全体コード" : "差分のみ"}`
+      );
       return extractedCode;
     } catch (error) {
       console.error("差分からコード抽出中にエラーが発生しました:", error);

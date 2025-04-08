@@ -333,7 +333,8 @@ export class PullRequestMonitoringService {
 
   /**
    * 単一のプルリクエストをチェック（webhook用）
-   * 改善: PR説明文の@codereview重複処理を防止
+   * - PR更新検出機能追加
+   * - 最新コードに対するレビュー機能強化
    */
   async checkSinglePullRequest(
     projectKey: string,
@@ -395,7 +396,6 @@ export class PullRequestMonitoringService {
         tracker.processed_at = new Date();
         tracker.review_count = 0;
         tracker.processed_comment_ids = "[]";
-        // 新規フィールド: 説明文処理済みフラグ
         tracker.description_processed = false;
         tracker = await this.pullRequestTrackerRepository.save(tracker);
       }
@@ -434,6 +434,30 @@ export class PullRequestMonitoringService {
         pr.description &&
         this.mentionDetectionService.detectCodeReviewMention(pr.description);
 
+      // PR更新検出（新機能）
+      let prUpdated = false;
+      if (tracker && tracker.last_review_at) {
+        // PR更新日時を取得（APIによって形式が異なる場合があるため安全に処理）
+        const prUpdatedAt = pr.updated
+          ? new Date(pr.updated)
+          : pr.updatedAt
+          ? new Date(pr.updatedAt)
+          : new Date();
+
+        const lastReviewAt = new Date(tracker.last_review_at);
+
+        console.log(`PRの最終更新日時: ${prUpdatedAt.toISOString()}`);
+        console.log(`最終レビュー日時: ${lastReviewAt.toISOString()}`);
+
+        // PR更新日時が最終レビュー日時より後の場合は再レビュー
+        if (prUpdatedAt > lastReviewAt) {
+          console.log(
+            `PR #${pullRequestId} は最後のレビュー以降に更新されています`
+          );
+          prUpdated = true;
+        }
+      }
+
       // 説明文チェック用の変数
       let isDescriptionRequest = false;
 
@@ -463,8 +487,15 @@ export class PullRequestMonitoringService {
       }
       // コメントIDが指定されていない場合（システム起動時や定期チェック時）
       else {
+        // PRに更新があり、新しいコミットがある場合を追加（新機能）
+        if (prUpdated) {
+          console.log(
+            `PR #${pullRequestId} に更新があったため、再レビューを実行します`
+          );
+          // この場合、以下の条件をスキップして直接レビュー実行に進む
+        }
         // PR説明文に@codereviewがあり、まだ処理していない場合
-        if (hasMentionInDescription && !tracker.description_processed) {
+        else if (hasMentionInDescription && !tracker.description_processed) {
           console.log(
             `PR #${pullRequestId} の説明文に未処理の @codereview メンションがあります`
           );
@@ -481,20 +512,22 @@ export class PullRequestMonitoringService {
             (comment) => !processedCommentIds.includes(comment.id)
           );
 
-          if (unprocessedComments.length === 0) {
+          if (unprocessedComments.length === 0 && !prUpdated) {
             console.log(
-              "未処理の @codereview コメントがないためスキップします"
+              "未処理の @codereview コメントがなく、PR更新もないためスキップします"
             );
             return false;
           }
 
           // 最新の未処理コメントを選択
-          const latestComment =
-            unprocessedComments[unprocessedComments.length - 1];
-          commentId = latestComment.id;
-          console.log(
-            `最新の未処理コメントID ${commentId} に対するレビューを生成します`
-          );
+          if (unprocessedComments.length > 0) {
+            const latestComment =
+              unprocessedComments[unprocessedComments.length - 1];
+            commentId = latestComment.id;
+            console.log(
+              `最新の未処理コメントID ${commentId} に対するレビューを生成します`
+            );
+          }
         }
         // 説明文に@codereviewがなく、コメントのみの場合
         else {
@@ -503,20 +536,22 @@ export class PullRequestMonitoringService {
             (comment) => !processedCommentIds.includes(comment.id)
           );
 
-          if (unprocessedComments.length === 0) {
+          if (unprocessedComments.length === 0 && !prUpdated) {
             console.log(
-              "未処理の @codereview コメントがないためスキップします"
+              "未処理の @codereview コメントがなく、PR更新もないためスキップします"
             );
             return false;
           }
 
           // 最新の未処理コメントを選択
-          const latestComment =
-            unprocessedComments[unprocessedComments.length - 1];
-          commentId = latestComment.id;
-          console.log(
-            `最新の未処理コメントID ${commentId} に対するレビューを生成します`
-          );
+          if (unprocessedComments.length > 0) {
+            const latestComment =
+              unprocessedComments[unprocessedComments.length - 1];
+            commentId = latestComment.id;
+            console.log(
+              `最新の未処理コメントID ${commentId} に対するレビューを生成します`
+            );
+          }
         }
       }
 
@@ -556,6 +591,19 @@ export class PullRequestMonitoringService {
         }
       }
 
+      // コンテキスト情報の構築（PR更新情報を追加）
+      const context = {
+        isReReview: existingReview !== null || prUpdated, // PR更新でも再レビューとみなす
+        reviewHistory: reviewHistory,
+        comments: comments,
+        existingReviewId: existingReview?.id,
+        sourceCommentId: commentId,
+        isDescriptionRequest: isDescriptionRequest,
+        checklistProgress: progressInfo.checklistRate?.rate || 0,
+        previousFeedbacks: progressInfo.previousFeedbacks,
+        isPrUpdate: prUpdated, // PR更新情報をコンテキストに追加
+      };
+
       // レビュー作成および実行
       await this.automaticReviewCreator.createReviewFromPullRequest(
         {
@@ -571,16 +619,7 @@ export class PullRequestMonitoringService {
           authorName: pr.createdUser?.name,
           authorMailAddress: pr.createdUser?.mailAddress || null,
         },
-        {
-          isReReview: existingReview !== null,
-          reviewHistory: reviewHistory,
-          comments: comments,
-          existingReviewId: existingReview?.id,
-          sourceCommentId: commentId,
-          isDescriptionRequest: isDescriptionRequest,
-          checklistProgress: progressInfo.checklistRate?.rate || 0, // チェックリスト進捗情報を追加
-          previousFeedbacks: progressInfo.previousFeedbacks, // 前回のフィードバック情報を追加
-        }
+        context
       );
 
       // 処理済みとしてマーク

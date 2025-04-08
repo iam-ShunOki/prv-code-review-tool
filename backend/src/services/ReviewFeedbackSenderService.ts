@@ -140,13 +140,13 @@ export class ReviewFeedbackSenderService {
 
       // Backlogにコメントを送信
       try {
-        console.log(`PR #${review.backlog_pr_id} にフィードバックを送信します`);
-        await this.backlogService.addPullRequestComment(
-          review.backlog_project,
-          review.backlog_repository,
-          review.backlog_pr_id,
-          formattedFeedback
-        );
+        // console.log(`PR #${review.backlog_pr_id} にフィードバックを送信します`);
+        // await this.backlogService.addPullRequestComment(
+        //   review.backlog_project,
+        //   review.backlog_repository,
+        //   review.backlog_pr_id,
+        //   formattedFeedback
+        // );
         // テスト段階なのでコメントを出力
         console.log(
           `#### テスト段階なので、コメントを出力します===================================================\n\n`
@@ -473,7 +473,7 @@ export class ReviewFeedbackSenderService {
       const filledLength = Math.round((checklistRate.rate / 100) * barLength);
       const emptyLength = barLength - filledLength;
 
-      const progressBar = "#".repeat(filledLength) + "-".repeat(emptyLength);
+      const progressBar = "■".repeat(filledLength) + "・".repeat(emptyLength);
 
       markdown += `[${progressBar}] ${checklistRate.rate.toFixed(1)}%\n\n`;
 
@@ -551,8 +551,8 @@ export class ReviewFeedbackSenderService {
               markdown += `\n\n`;
             }
           } else if (isReReview) {
-            // 再レビュー時は未チェック項目に対応を促す
-            markdown += `   **[要対応]** この項目はまだ解決していません。対応を完了したらチェックしてください。\n\n`;
+            // 再レビュー時の未チェック項目の文言を変更
+            markdown += `   **[未解決]** この項目はまだ解決されていません。修正後のコードは次回レビュー時にAIが自動的に評価します。\n\n`;
           }
 
           markdown += "\n";
@@ -560,6 +560,7 @@ export class ReviewFeedbackSenderService {
       }
     );
 
+    // フッター部分も修正
     // フッター
     markdown += "---\n";
 
@@ -568,7 +569,7 @@ export class ReviewFeedbackSenderService {
         "おめでとうございます！すべてのチェックリスト項目が完了しました。コードの品質向上に取り組んでいただきありがとうございます。";
     } else {
       markdown +=
-        "このレビューはAIによって自動生成されました。チェックリストの各項目を確認し、修正が完了するまでAIによるレビューを続けてください。";
+        "このレビューはAIによって自動生成されました。修正が完了したら、再度 @codereview メンションを追加してレビューを依頼してください。AIが変更内容を評価し、自動的にチェックリストを更新します。";
     }
 
     markdown += `\n\n<!-- ${reviewToken} -->\n`;

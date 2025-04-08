@@ -137,22 +137,29 @@ export class FeedbackService {
 
   /**
    * フィードバックのチェック状態を更新
+   * @param id フィードバックID
+   * @param isChecked チェック状態
+   * @param userId チェックを行ったユーザーID（0の場合はAIによる自動チェック）
+   * @param isAutoCheck AIによる自動チェックかどうか
    */
   async updateFeedbackCheckStatus(
     id: number,
     isChecked: boolean,
-    userId: number
+    userId: number = 0, // デフォルト値を設定
+    isAutoCheck: boolean = true // デフォルトでAI自動チェック
   ): Promise<Feedback | null> {
+    const checkSource =
+      userId === 0 || isAutoCheck ? "AI" : `ユーザーID ${userId}`;
     console.log(
       `フィードバック #${id} のチェック状態を ${
         isChecked ? "チェック済み" : "未チェック"
-      } に更新します (ユーザー #${userId})`
+      } に更新します (${checkSource}による更新)`
     );
 
     await this.feedbackRepository.update(id, {
       is_checked: isChecked,
       checked_at: isChecked ? new Date() : undefined,
-      checked_by: isChecked ? userId : undefined,
+      checked_by: isChecked ? userId || 0 : undefined, // 0はAIを表す
     });
 
     return this.getFeedbackById(id);
@@ -160,11 +167,12 @@ export class FeedbackService {
 
   /**
    * 複数のフィードバックのチェック状態を一括更新
+   * AIによる自動チェックとして扱う
    */
   async bulkUpdateCheckStatus(
     ids: number[],
     isChecked: boolean,
-    userId: number
+    userId: number = 0 // デフォルト値をAI（0）に変更
   ): Promise<boolean> {
     if (ids.length === 0) {
       console.log("更新対象のフィードバックIDが指定されていません");
@@ -172,7 +180,7 @@ export class FeedbackService {
     }
 
     console.log(
-      `${ids.length}件のフィードバックのチェック状態を一括更新します`
+      `${ids.length}件のフィードバックのチェック状態を一括更新します (AIによる自動チェック)`
     );
 
     try {
