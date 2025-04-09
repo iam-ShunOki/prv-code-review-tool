@@ -39,6 +39,7 @@ export class GitHubPullRequestMonitoringService {
     console.log("既存のGitHub PRをチェックします");
     let processed = 0;
     let skipped = 0;
+    const startTime = new Date();
 
     try {
       // アクティブなGitHubリポジトリを取得
@@ -59,6 +60,13 @@ export class GitHubPullRequestMonitoringService {
 
         try {
           // APIクライアントを初期化
+          if (!repo.access_token) {
+            console.warn(
+              `リポジトリ ${repo.owner}/${repo.name} にアクセストークンが設定されていません`
+            );
+            continue;
+          }
+
           this.githubService.initializeWithToken(repo.access_token);
 
           // オープン状態のPRを取得
@@ -68,18 +76,29 @@ export class GitHubPullRequestMonitoringService {
           );
           console.log(`オープンPR: ${pullRequests.length}件`);
 
+          if (pullRequests.length === 0) {
+            console.log(
+              `リポジトリ ${repo.owner}/${repo.name} にはオープンPRがありません`
+            );
+            continue;
+          }
+
           // 各PRを処理
           for (const pr of pullRequests) {
             try {
               const prNumber = pr.number;
+              console.log(`PR #${prNumber} "${pr.title}" を処理中...`);
 
               // PRの説明文をチェック
+              const prBody = pr.body || "";
               const hasMentionInDescription =
-                pr.body &&
-                this.mentionDetectionService.detectCodeReviewMention(pr.body);
+                this.mentionDetectionService.detectCodeReviewMention(prBody);
 
               if (hasMentionInDescription) {
                 // 説明文に@codereviewメンションがある場合
+                console.log(
+                  `PR #${prNumber} の説明文に @codereview メンションがあります`
+                );
                 const isProcessed = await this.isPRDescriptionProcessed(
                   repo.owner,
                   repo.name,
@@ -88,6 +107,9 @@ export class GitHubPullRequestMonitoringService {
 
                 if (!isProcessed) {
                   // 未処理の場合は処理
+                  console.log(
+                    `PR #${prNumber} の説明文は未処理です。処理を開始します`
+                  );
                   const result = await this.checkSinglePullRequest(
                     repo.owner,
                     repo.name,
@@ -110,23 +132,35 @@ export class GitHubPullRequestMonitoringService {
                     `PR #${prNumber} (${repo.owner}/${repo.name}): 説明文は既に処理済み`
                   );
                 }
+              } else {
+                console.log(
+                  `PR #${prNumber} の説明文に @codereview メンションはありません`
+                );
               }
 
               // コメントをチェック
+              console.log(`PR #${prNumber} のコメントを取得中...`);
               const comments = await this.githubService.getPullRequestComments(
                 repo.owner,
                 repo.name,
                 prNumber
               );
+              console.log(`PR #${prNumber} のコメント数: ${comments.length}`);
+
+              let commentProcessed = false;
 
               for (const comment of comments) {
+                const commentBody = comment.body || "";
                 if (
-                  comment.body &&
                   this.mentionDetectionService.detectCodeReviewMention(
-                    comment.body
+                    commentBody
                   )
                 ) {
-                  // コメントに@codereviewメンションがある場合
+                  console.log(
+                    `コメント #${comment.id} に @codereview メンションがあります`
+                  );
+
+                  // コメントが処理済みかチェック
                   const isProcessed = await this.isCommentProcessed(
                     repo.owner,
                     repo.name,
@@ -135,6 +169,9 @@ export class GitHubPullRequestMonitoringService {
                   );
 
                   if (!isProcessed) {
+                    console.log(
+                      `コメント #${comment.id} は未処理です。処理を開始します`
+                    );
                     // 未処理の場合は処理
                     const result = await this.checkSinglePullRequest(
                       repo.owner,
@@ -144,6 +181,7 @@ export class GitHubPullRequestMonitoringService {
                     );
                     if (result) {
                       processed++;
+                      commentProcessed = true;
                       console.log(
                         `PR #${prNumber} コメント#${comment.id} (${repo.owner}/${repo.name}): 処理完了`
                       );
@@ -160,6 +198,15 @@ export class GitHubPullRequestMonitoringService {
                     );
                   }
                 }
+              }
+
+              // 1つのPRにつき処理するのは最大1つのコメント（説明文か最新のコメント）
+              if (commentProcessed) {
+                console.log(
+                  `PR #${prNumber} はコメントからのリクエストとして処理しました`
+                );
+                // この後のコメントはスキップしてもOK
+                break;
               }
             } catch (prError) {
               console.error(
@@ -179,12 +226,17 @@ export class GitHubPullRequestMonitoringService {
       console.error("プルリクエストスキャン中にエラーが発生しました:", error);
     }
 
+    // 処理時間を計算
+    const endTime = new Date();
+    const elapsedMs = endTime.getTime() - startTime.getTime();
+
     console.log(
-      `GitHub PRスキャン完了: 処理=${processed}件, スキップ=${skipped}件`
+      `GitHub PRスキャン完了: 処理=${processed}件, スキップ=${skipped}件, 所要時間=${
+        elapsedMs / 1000
+      }秒`
     );
     return { processed, skipped };
   }
-
   /**
    * 単一のプルリクエストをチェックしてAIレビューを実行
    */
@@ -219,8 +271,26 @@ export class GitHubPullRequestMonitoringService {
         return false;
       }
 
+      // アクセストークンが設定されているか確認
+      if (!repository.access_token) {
+        console.log(
+          `リポジトリ ${owner}/${repo} にアクセストークンが設定されていません`
+        );
+        return false;
+      }
+
       // GitHubサービスを初期化
-      this.githubService.initializeWithToken(repository.access_token);
+      this.githubService = new GitHubService(); // 確実に新しいインスタンスを作成
+      const initResult = this.githubService.initializeWithToken(
+        repository.access_token
+      );
+
+      if (!initResult) {
+        console.log(
+          `リポジトリ ${owner}/${repo} のGitHub API初期化に失敗しました`
+        );
+        return false;
+      }
 
       // PRの詳細を取得（クローズされていないか確認）
       const prDetails = await this.githubService.getPullRequestDetails(
@@ -228,6 +298,7 @@ export class GitHubPullRequestMonitoringService {
         repo,
         prNumber
       );
+
       if (prDetails.state !== "open") {
         console.log(`PR #${prNumber} はクローズされているためスキップします`);
         return false;
@@ -273,21 +344,15 @@ export class GitHubPullRequestMonitoringService {
         console.log(
           `PR #${prNumber} は再レビューです（${trackerRecord.review_count}回目）`
         );
-        // 本来はここで前回のフィードバック情報を取得する処理を実装
+        // 前回のフィードバック情報を取得する処理を実装
       }
-
-      // PR差分を取得
-      const diffData = await this.githubService.getPullRequestDiff(
-        owner,
-        repo,
-        prNumber
-      );
 
       // レビュートークンを生成
       const reviewToken = `github-review-${owner}-${repo}-${prNumber}-${Date.now()}`;
 
-      // AIレビューを実行
-      const reviewResult = await this.aiService.reviewGitHubPullRequest(
+      // AIレビューを実行（AIServiceに必要なパラメータを渡す）
+      const aiService = new AIService(); // 新しいインスタンスを作成
+      const reviewResult = await aiService.reviewGitHubPullRequest(
         owner,
         repo,
         prNumber,
@@ -300,18 +365,34 @@ export class GitHubPullRequestMonitoringService {
         }
       );
 
-      // レビュー結果をGitHubに送信
-      await this.feedbackSenderService.sendReviewFeedbackToPullRequest(
-        owner,
-        repo,
-        prNumber,
-        reviewToken,
-        reviewResult,
-        {
-          isReReview,
-          sourceCommentId: commentId,
-        }
+      // レビュー結果が正しく生成されたか確認
+      if (!reviewResult || reviewResult.length === 0) {
+        console.warn(`PR #${prNumber} のレビュー結果が空です`);
+        return false;
+      }
+
+      console.log(
+        `PR #${prNumber} のレビュー結果: ${reviewResult.length} 件のフィードバック`
       );
+
+      // レビュー結果をGitHubに送信
+      const sendResult =
+        await this.feedbackSenderService.sendReviewFeedbackToPullRequest(
+          owner,
+          repo,
+          prNumber,
+          reviewToken,
+          reviewResult,
+          {
+            isReReview,
+            sourceCommentId: commentId,
+          }
+        );
+
+      if (!sendResult) {
+        console.error(`PR #${prNumber} へのレビュー結果送信に失敗しました`);
+        return false;
+      }
 
       // 処理済みとしてマーク
       if (commentId) {
@@ -585,18 +666,53 @@ export class GitHubPullRequestMonitoringService {
   }
 
   /**
-   * オープン状態のPRを取得
+   * 指定されたリポジトリのオープン状態のPRを取得
+   * @param owner リポジトリオーナー
+   * @param repo リポジトリ名
+   * @returns オープンPRの配列
    */
   private async getOpenPullRequests(
     owner: string,
     repo: string
   ): Promise<any[]> {
     try {
-      // GitHubサービスを使用してオープンPRを取得
-      // この実装はダミーです
-      return [];
+      console.log(`リポジトリ ${owner}/${repo} のオープンPRを取得します`);
+
+      // GitHubサービスを使用してオープンPRを取得（state=openでAPI呼び出し）
+      const pullRequests = await this.githubService.getPullRequests(
+        owner,
+        repo,
+        "open", // open状態のPRのみ
+        "updated", // 更新日時でソート
+        "desc", // 降順（最新が先頭）
+        100 // 一度に最大100件取得
+      );
+
+      if (pullRequests.length > 0) {
+        console.log(
+          `${owner}/${repo} で ${pullRequests.length}件のオープンPRを取得しました`
+        );
+
+        // デバッグ情報：取得したPRの番号とタイトルを表示
+        pullRequests.forEach((pr) => {
+          console.log(`  PR #${pr.number}: ${pr.title} (${pr.updated_at})`);
+        });
+      } else {
+        console.log(`${owner}/${repo} にはオープンPRがありません`);
+      }
+
+      return pullRequests;
     } catch (error) {
       console.error(`オープンPR取得エラー (${owner}/${repo}):`, error);
+
+      // エラーの詳細情報を記録
+      if (error instanceof Error) {
+        console.error(`エラー種別: ${error.name}`);
+        console.error(`エラーメッセージ: ${error.message}`);
+        console.error(`スタックトレース: ${error.stack}`);
+      }
+
+      // エラー時は空配列を返す
       return [];
     }
   }
@@ -614,5 +730,138 @@ export class GitHubPullRequestMonitoringService {
       repo,
       pullRequestId
     );
+  }
+
+  /**
+   * 特定のリポジトリだけを対象にPRチェックを実行（テスト用）
+   * @param repositoryId GitHubリポジトリのID
+   */
+  async testSingleRepository(repositoryId: number): Promise<{
+    repository: string;
+    pullRequests: number;
+    processed: number;
+    skipped: number;
+  }> {
+    console.log(`リポジトリID: ${repositoryId} のテストを実行します`);
+    let processed = 0;
+    let skipped = 0;
+    let pullRequestCount = 0;
+    let repositoryName = "";
+
+    try {
+      // リポジトリを取得
+      const repository = await this.githubRepositoryRepository.findOne({
+        where: { id: repositoryId, is_active: true },
+      });
+
+      if (!repository) {
+        console.error(`リポジトリID ${repositoryId} が見つからないか無効です`);
+        return {
+          repository: "不明",
+          pullRequests: 0,
+          processed: 0,
+          skipped: 0,
+        };
+      }
+
+      repositoryName = `${repository.owner}/${repository.name}`;
+      console.log(`リポジトリ ${repositoryName} をテストします`);
+
+      // APIクライアントを初期化
+      if (!repository.access_token) {
+        console.warn(
+          `リポジトリ ${repositoryName} にアクセストークンが設定されていません`
+        );
+        return {
+          repository: repositoryName,
+          pullRequests: 0,
+          processed: 0,
+          skipped: 0,
+        };
+      }
+
+      this.githubService.initializeWithToken(repository.access_token);
+
+      // 接続テスト
+      try {
+        const repoInfo = await this.githubService.getRepositoryInfo(
+          repository.owner,
+          repository.name
+        );
+        console.log(`リポジトリ情報取得成功: ${repoInfo?.full_name || "不明"}`);
+      } catch (connError) {
+        console.error(`リポジトリ接続テストに失敗しました:`, connError);
+        return {
+          repository: repositoryName,
+          pullRequests: 0,
+          processed: 0,
+          skipped: 0,
+        };
+      }
+
+      // オープン状態のPRを取得
+      const pullRequests = await this.getOpenPullRequests(
+        repository.owner,
+        repository.name
+      );
+      pullRequestCount = pullRequests.length;
+      console.log(`オープンPR: ${pullRequestCount}件`);
+
+      if (pullRequestCount === 0) {
+        return {
+          repository: repositoryName,
+          pullRequests: 0,
+          processed: 0,
+          skipped: 0,
+        };
+      }
+
+      // 各PRを処理
+      for (const pr of pullRequests) {
+        try {
+          const prNumber = pr.number;
+          console.log(
+            `PR #${prNumber} "${pr.title}" (${pr.html_url}) のテスト`
+          );
+
+          // PR情報を表示
+          console.log(`  作成者: ${pr.user.login}`);
+          console.log(`  作成日時: ${pr.created_at}`);
+          console.log(`  更新日時: ${pr.updated_at}`);
+          console.log(`  ブランチ: ${pr.head.ref} → ${pr.base.ref}`);
+          console.log(
+            `  状態: ${pr.state} (マージ可能: ${pr.mergeable_state || "不明"})`
+          );
+
+          // メンション検出のテスト
+          const prBody = pr.body || "";
+          const hasMentionInDescription =
+            this.mentionDetectionService.detectCodeReviewMention(prBody);
+          console.log(
+            `  説明文に @codereview メンション: ${
+              hasMentionInDescription ? "あり" : "なし"
+            }`
+          );
+
+          // このテスト用メソッドでは実際の処理は行わず、情報表示のみ
+          skipped++;
+        } catch (prError) {
+          console.error(
+            `PR #${pr.number} (${repositoryName}) のテスト中にエラー:`,
+            prError
+          );
+          skipped++;
+        }
+      }
+    } catch (error) {
+      console.error(`リポジトリテスト中にエラーが発生しました:`, error);
+    }
+
+    return {
+      repository: repositoryName,
+      pullRequests: pullRequestCount,
+      processed,
+      skipped,
+    };
   }
 }

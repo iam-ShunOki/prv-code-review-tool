@@ -33,7 +33,7 @@ export class GitHubService {
           Accept: "application/vnd.github.v3+json",
           "User-Agent": "CodeReviewApp",
         },
-        timeout: 10000, // 10秒
+        timeout: 30000, // 30秒に延長（大きなリポジトリの場合を考慮）
       });
 
       // リクエスト/レスポンスインターセプタを設定
@@ -92,7 +92,19 @@ export class GitHubService {
         }
       );
 
-      console.log("GitHub API初期化成功");
+      // 接続テスト
+      this.axiosInstance
+        .get("/")
+        .then(() => {
+          console.log("GitHub API初期化成功 - 接続テスト完了");
+        })
+        .catch((err) => {
+          console.warn(
+            "GitHub API接続テストに失敗しましたが、初期化は完了しています:",
+            err.message
+          );
+        });
+
       return this.axiosInstance;
     } catch (error) {
       console.error("GitHub API初期化エラー:", error);
@@ -147,6 +159,62 @@ export class GitHubService {
 
       throw new Error(
         `リポジトリ情報の取得に失敗しました: ${error.message || "不明なエラー"}`
+      );
+    }
+  }
+
+  /**
+   * リポジトリのプルリクエスト一覧を取得
+   * @param owner リポジトリオーナー
+   * @param repo リポジトリ名
+   * @param state プルリクエストの状態 (open, closed, all)
+   * @param sort ソート項目 (created, updated, popularity, long-running)
+   * @param direction ソート方向 (asc, desc)
+   * @param perPage 1ページあたりの件数
+   * @param page ページ番号
+   */
+  async getPullRequests(
+    owner: string,
+    repo: string,
+    state: string = "open",
+    sort: string = "updated",
+    direction: string = "desc",
+    perPage: number = 100,
+    page: number = 1
+  ): Promise<any[]> {
+    if (!this.axiosInstance) {
+      throw new Error("GitHub APIが初期化されていません");
+    }
+
+    try {
+      console.log(`PR一覧を取得: ${owner}/${repo} (state=${state})`);
+      const response = await this.axiosInstance.get(
+        `/repos/${owner}/${repo}/pulls`,
+        {
+          params: {
+            state,
+            sort,
+            direction,
+            per_page: perPage,
+            page,
+          },
+        }
+      );
+
+      console.log(`${response.data.length}件のPRを取得しました`);
+      return response.data;
+    } catch (error: any) {
+      console.error(`PR一覧取得エラー (${owner}/${repo}):`, error);
+
+      if (error.response && error.response.status === 404) {
+        console.warn(
+          `リポジトリが存在しないか、アクセス権限がありません: ${owner}/${repo}`
+        );
+        return [];
+      }
+
+      throw new Error(
+        `PRの一覧取得に失敗しました: ${error.message || "不明なエラー"}`
       );
     }
   }

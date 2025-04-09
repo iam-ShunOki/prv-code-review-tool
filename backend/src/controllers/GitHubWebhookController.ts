@@ -636,4 +636,108 @@ export class GitHubWebhookController {
       throw error;
     }
   };
+
+  /**
+   * GitHub設定情報を取得
+   */
+  getGitHubInfo = async (req: Request, res: Response): Promise<void> => {
+    try {
+      // 環境設定情報を取得
+      const githubIntegrationEnabled =
+        process.env.GITHUB_INTEGRATION_ENABLED === "true";
+      const autoReviewEnabled =
+        process.env.GITHUB_AUTO_REVIEW_ENABLED === "true";
+      const webhookSecret = process.env.GITHUB_WEBHOOK_SECRET
+        ? "設定済み"
+        : "未設定";
+      const serverBaseUrl =
+        process.env.SERVER_BASE_URL || `http://localhost:3001`;
+      const webhookUrl = `${serverBaseUrl}/api/github/webhook`;
+
+      // リポジトリ数を取得
+      const repositoryCount = await this.githubRepositoryRepository.count({
+        where: { is_active: true },
+      });
+
+      // 処理済みPR数を取得
+      const trackerCount =
+        await this.githubPullRequestTrackerRepository.count();
+
+      res.status(200).json({
+        success: true,
+        data: {
+          integration_enabled: githubIntegrationEnabled,
+          auto_review_enabled: autoReviewEnabled,
+          webhook_url: webhookUrl,
+          webhook_secret: webhookSecret,
+          repository_count: repositoryCount,
+          processed_pr_count: trackerCount,
+        },
+      });
+    } catch (error) {
+      console.error("GitHub情報取得エラー:", error);
+      res.status(500).json({
+        success: false,
+        message: "GitHub情報の取得中にエラーが発生しました",
+        error: error instanceof Error ? error.message : "不明なエラー",
+      });
+    }
+  };
+
+  /**
+   * 既存のPRをチェック（手動実行用）
+   */
+  checkExistingPRs = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const monitoringService = new GitHubPullRequestMonitoringService();
+      const result = await monitoringService.checkExistingPullRequests();
+
+      res.status(200).json({
+        success: true,
+        message: "GitHub PRチェックが完了しました",
+        data: result,
+      });
+    } catch (error) {
+      console.error("GitHub PRチェックエラー:", error);
+      res.status(500).json({
+        success: false,
+        message: "GitHub PRチェック中にエラーが発生しました",
+        error: error instanceof Error ? error.message : "不明なエラー",
+      });
+    }
+  };
+
+  /**
+   * 特定のリポジトリをテスト
+   */
+  testRepository = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { id } = req.params;
+      const repositoryId = parseInt(id);
+
+      if (isNaN(repositoryId)) {
+        res.status(400).json({
+          success: false,
+          message: "無効なリポジトリIDです",
+        });
+        return;
+      }
+
+      const monitoringService = new GitHubPullRequestMonitoringService();
+      const result = await monitoringService.testSingleRepository(repositoryId);
+
+      res.status(200).json({
+        success: true,
+        message: "リポジトリテストが完了しました",
+        data: result,
+      });
+    } catch (error) {
+      console.error("リポジトリテストエラー:", error);
+      res.status(500).json({
+        success: false,
+        message: "リポジトリテスト中にエラーが発生しました",
+        error: error instanceof Error ? error.message : "不明なエラー",
+      });
+    }
+  };
 }

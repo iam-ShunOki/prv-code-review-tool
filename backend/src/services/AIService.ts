@@ -21,6 +21,7 @@ import {
 import { BacklogService } from "./BacklogService";
 import { RepositoryVectorSearchService } from "./RepositoryVectorSearchService";
 import { GitHubService } from "./GitHubService";
+import { GitHubRepository } from "../models/GitHubRepository";
 
 // プルリクエストレビューのコンテキスト型
 interface PullRequestReviewContext {
@@ -54,6 +55,7 @@ export class AIService {
   private feedbackService: FeedbackService;
   private submissionService: SubmissionService;
   private backlogService: BacklogService;
+  private githubService: GitHubService;
   private repositoryVectorService: RepositoryVectorSearchService;
 
   constructor() {
@@ -1226,12 +1228,26 @@ ${outputParser.getFormatInstructions()}
     );
 
     try {
-      // GitHubサービスを取得 (GitHubServiceは別途インポートが必要)
-      // 注: このコードをAIService.tsに追加する際はGitHubServiceをインポートしてください
-      const githubService = new GitHubService();
+      // アクセストークンの取得
+      // GitHub RepositoryからアクセストークンをDBから取得
+      const repositoryRepository =
+        AppDataSource.getRepository(GitHubRepository);
+      const repositoryConfig = await repositoryRepository.findOne({
+        where: { owner, name: repo },
+      });
 
-      // PR差分を取得
-      const diffData = await githubService.getPullRequestDiff(
+      if (!repositoryConfig || !repositoryConfig.access_token) {
+        throw new Error(
+          `リポジトリ ${owner}/${repo} の設定がないかアクセストークンが無効です`
+        );
+      }
+
+      // GitHubサービスを初期化
+      this.githubService = new GitHubService(); // 確実に新しいインスタンスを作成
+      this.githubService.initializeWithToken(repositoryConfig.access_token);
+
+      // PR差分を取得（初期化したgithubServiceを使用）
+      const diffData = await this.githubService.getPullRequestDiff(
         owner,
         repo,
         pullRequestId
@@ -1249,9 +1265,6 @@ ${outputParser.getFormatInstructions()}
       const reviewToken =
         context?.reviewToken ||
         `github-review-${owner}-${repo}-${pullRequestId}-${Date.now()}`;
-
-      // 再レビュー時の前回フィードバックチェック処理
-      // この実装は省略しています
 
       // プロンプトフォーマットをより明確に
       const outputParser = StructuredOutputParser.fromZodSchema(
@@ -1304,7 +1317,7 @@ ${outputParser.getFormatInstructions()}
         {
           role: "user",
           content: `以下のGitHub Pull Requestをレビューし、新入社員の成長を促す前向きなフィードバックを生成してください。
-        
+      
 # Pull Request情報
 - PR番号: #${pullRequestId}
 - リポジトリ: ${owner}/${repo}

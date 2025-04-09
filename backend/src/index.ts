@@ -7,7 +7,6 @@ import { AppDataSource } from "./data-source";
 import { PullRequestMonitoringService } from "./services/PullRequestMonitoringService";
 import { WebhookUrlService } from "./services/WebhookUrlService";
 import { RepositoryWhitelistService } from "./services/RepositoryWhitelistService";
-import { ReviewFeedbackSenderService } from "./services/ReviewFeedbackSenderService";
 import { BacklogService } from "./services/BacklogService";
 import { MentionDetectionService } from "./services/MentionDetectionService";
 import { GitHubRepository } from "./models/GitHubRepository";
@@ -161,7 +160,7 @@ async function initializeGitHubIntegration() {
     if (autoReviewEnabled) {
       const githubPullRequestMonitoringService =
         new GitHubPullRequestMonitoringService();
-      const CHECK_INTERVAL_MS = 0.5 * 60 * 1000; // 0.5分間隔
+      const CHECK_INTERVAL_MS = 15 * 60 * 1000; // 15分間隔
       console.log(
         `GitHub PR定期チェックを設定: ${CHECK_INTERVAL_MS / 60000}分間隔`
       );

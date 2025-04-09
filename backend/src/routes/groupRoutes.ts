@@ -1,39 +1,89 @@
-// backend/src/routes/groupRoutes.ts
+// backend/src/routes/githubRoutes.ts
 import express from "express";
-import { GroupController } from "../controllers/GroupController";
+import { GitHubWebhookController } from "../controllers/GitHubWebhookController";
+import { GitHubRepositoryController } from "../controllers/GitHubRepositoryController";
 import { authenticate, requireAdmin } from "../middlewares/authMiddleware";
 
 const router = express.Router();
-const groupController = new GroupController();
+const githubWebhookController = new GitHubWebhookController();
+const githubRepositoryController = new GitHubRepositoryController();
 
-// 認証済みユーザー向けエンドポイント
-router.get("/", authenticate, groupController.getAllGroups);
-router.get("/my", authenticate, groupController.getMyGroups);
-router.get("/mates", authenticate, groupController.getGroupMates);
-router.get("/:id", authenticate, groupController.getGroupById);
-router.get("/:id/members", authenticate, groupController.getGroupMembers);
+// Webhookエンドポイント (認証なし)
+router.post("/webhook", githubWebhookController.handleWebhook);
 
-// 管理者向けエンドポイント
-router.post("/", authenticate, requireAdmin, groupController.createGroup);
-router.patch("/:id", authenticate, requireAdmin, groupController.updateGroup);
-router.delete("/:id", authenticate, requireAdmin, groupController.deleteGroup);
+// GitHub情報取得
+router.get("/info", authenticate, githubWebhookController.getGitHubInfo);
+
+// PR関連エンドポイント
 router.post(
-  "/:id/members",
+  "/check-prs",
   authenticate,
   requireAdmin,
-  groupController.addGroupMember
+  githubWebhookController.checkExistingPRs
 );
-router.delete(
-  "/:id/members/:userId",
+
+// リポジトリテスト
+router.get(
+  "/test-repository/:id",
   authenticate,
   requireAdmin,
-  groupController.removeGroupMember
+  githubWebhookController.testRepository
 );
+
+// リポジトリ関連API (認証あり)
+router.get(
+  "/repositories",
+  authenticate,
+  githubRepositoryController.getAllRepositories
+);
+
+router.get(
+  "/repositories/:id",
+  authenticate,
+  githubRepositoryController.getRepositoryById
+);
+
+router.post(
+  "/repositories",
+  authenticate,
+  requireAdmin,
+  githubRepositoryController.createRepository
+);
+
+router.put(
+  "/repositories/:id",
+  authenticate,
+  requireAdmin,
+  githubRepositoryController.updateRepository
+);
+
 router.patch(
-  "/:id/members/:userId/role",
+  "/repositories/:id",
   authenticate,
   requireAdmin,
-  groupController.updateMemberRole
+  githubRepositoryController.updateRepository
+);
+
+router.delete(
+  "/repositories/:id",
+  authenticate,
+  requireAdmin,
+  githubRepositoryController.deleteRepository
+);
+
+// リポジトリ検証
+router.post(
+  "/validate-repository",
+  authenticate,
+  requireAdmin,
+  githubRepositoryController.validateRepository
+);
+
+// オーナー別リポジトリ取得
+router.get(
+  "/owners/:owner/repositories",
+  authenticate,
+  githubRepositoryController.getRepositoriesByOwner
 );
 
 export default router;
