@@ -777,7 +777,7 @@ ${outputParser.getFormatInstructions()}
         {
           role: "system",
           content:
-            "あなたは親切で育成志向のコードレビュアーです。新入社員のプログラミング学習を支援するため、励ましながらも的確なアドバイスを提供してください。完璧さよりも成長を重視し、良い部分は積極的に評価してください。指定された形式で結果を返し、必ず以下のルールを守ってください:\n\n1. 応答は純粋なJSONのみを含めること\n2. マークダウンのコードブロック (```) で囲まないこと\n3. 最初から最後まで有効なJSON配列のみを返すこと\n4. JSON配列は必ず [ で始まり ] で終わること\n5. JSONの前後に他のテキストを含めないこと\n6. JSONコメント(// や /* */)を含めないこと",
+            "あなたは親切で育成志向のコードレビュアーです。新入社員のプログラミング学習を支援するため、励ましながらも的確なアドバイスを提供してください。完璧さよりも成長を重視し、良い部分は積極的に評価してください。指定された形式で結果を返し、必ず以下のルールを守ってください:\n\n1. 応答は純粋なJSONのみを含めること\n2. マークダウンのコードブロック (```) で囲まないこと\n3. 最初から最後まで有効なJSON配列のみを返すこと\n4. JSON配列は必ず [ で始まり ] で終わること\n5. JSONの前後に他のテキストを含めないこと\n6. JSONコメント(// や /* */)を含めないこと\n7. 決して解答例を提示せず、改善案と参考資料のみを提示すること",
         },
         {
           role: "user",
@@ -833,8 +833,8 @@ ${outputParser.getFormatInstructions()}
       2. problem_point: 改善点の説明（前向きな表現を心がけてください）
       3. suggestion: 改善するためのアドバイス（押し付けではなく提案として）
       4. priority: 優先度 (high, medium, low のいずれか)
-      5. code_snippet: 該当する部分のコード (省略可)
-      6. reference_url: 参考資料へのリンク (省略可)
+      5. code_snippet: 該当する部分のコード
+      6. reference_url: 参考資料へのリンク
       7. is_checked: この基準を満たしているかどうか (true/false)
       
       # 評価の重要ポイント
@@ -846,6 +846,7 @@ ${outputParser.getFormatInstructions()}
       - 完璧を求めず、成長の過程を尊重してください
       - 各カテゴリから最低1つ以上の良い点も指摘してください
       - 再レビュー時は、少しでも改善があれば「解決」と判断してください
+      - 決して解答例を提示せず、改善案と参考資料のみを提示してください
       
       # 出力形式
       必ず以下の JSON 配列形式のみで回答してください：
@@ -856,7 +857,7 @@ ${outputParser.getFormatInstructions()}
           "problem_point": "改善点の説明",
           "suggestion": "改善提案",
           "priority": "medium",
-          "code_snippet": "該当コード例",
+          "code_snippet": "問題となっているコード",
           "reference_url": "https://example.com/reference",
           "is_checked": false
         }
@@ -868,6 +869,7 @@ ${outputParser.getFormatInstructions()}
         - true = この基準を満たしている（問題なし、または許容範囲内）
         - false = この基準を満たしていない（改善の余地あり）
       - JSONの外側にテキストやマークダウンを含めないでください
+      - 決して解答例を提示せず、改善案と参考資料のみを提示してください
       
       # 固有トークン
       このレビューの固有識別トークン: ${reviewToken}
@@ -1210,12 +1212,12 @@ ${outputParser.getFormatInstructions()}
     context?: GitHubPullRequestReviewContext
   ): Promise<
     Array<{
-      problem_point: string;
-      suggestion: string;
-      priority: FeedbackPriority;
+      feedback_type: "strength" | "improvement"; // 良い点か改善点かを区別
+      category: FeedbackCategory;
+      point: string; // 内容（良い点または問題点）
+      suggestion?: string; // 改善点の場合の提案
       code_snippet?: string;
       reference_url?: string;
-      category?: FeedbackCategory;
       review_token?: string;
     }>
   > {
@@ -1270,13 +1272,12 @@ ${outputParser.getFormatInstructions()}
       const outputParser = StructuredOutputParser.fromZodSchema(
         z.array(
           z.object({
+            feedback_type: z.enum(["strength", "improvement"]),
             category: z.nativeEnum(FeedbackCategory),
-            problem_point: z.string(),
-            suggestion: z.string(),
-            priority: z.nativeEnum(FeedbackPriority),
+            point: z.string(),
+            suggestion: z.string().optional(),
             code_snippet: z.string().optional(),
             reference_url: z.string().optional(),
-            is_checked: z.boolean(),
           })
         )
       );
@@ -1308,11 +1309,12 @@ ${outputParser.getFormatInstructions()}
       // 前回のレビュー情報がある場合は処理（詳細実装は省略）
 
       // 強化したプロンプト
+      // 強化したプロンプト - 教育目的重視
       const messages = [
         {
           role: "system",
           content:
-            "あなたは親切で育成志向のコードレビュアーです。新入社員のプログラミング学習を支援するため、励ましながらも的確なアドバイスを提供してください。完璧さよりも成長を重視し、良い部分は積極的に評価してください。指定された形式で結果を返し、必ず以下のルールを守ってください:\n\n1. 応答は純粋なJSONのみを含めること\n2. マークダウンのコードブロック (```) で囲まないこと\n3. 最初から最後まで有効なJSON配列のみを返すこと\n4. JSON配列は必ず [ で始まり ] で終わること\n5. JSONの前後に他のテキストを含めないこと\n6. JSONコメント(// や /* */)を含めないこと",
+            "あなたはIT企業における新入社員の成長を支援する教育担当メンターです。新入社員がコードレビューを通じて学べるよう、励ましながらも具体的な改善点を提示します。完璧さよりも成長を重視し、良い部分を積極的に評価するとともに、すべての問題に公平に向き合う姿勢を教えてください。指定された形式で結果を返し、必ず以下のルールを守ってください:\n\n1. 応答は純粋なJSONのみを含めること\n2. マークダウンのコードブロック (```) で囲まないこと\n3. 最初から最後まで有効なJSON配列のみを返すこと\n4. JSON配列は必ず [ で始まり ] で終わること\n5. JSONの前後に他のテキストを含めないこと\n6. JSONコメント(// や /* */)を含めないこと\n7. 決して解答例を提示せず、改善案と参考資料のみを提示すること",
         },
         {
           role: "user",
@@ -1336,19 +1338,18 @@ ${
   context?.isReReview
     ? `
 # 再レビュー指示
-このプルリクエストは以前にもレビューされています。以下の点に注意してください：
-1. 前回のレビューで指摘された問題に対する改善努力を評価してください
-2. 完璧でなくても、改善の方向性が正しければ前向きに評価してください
-3. 良くなった部分は積極的に褒めてください
-4. 引き続き改善が必要な点は優しく提案してください
-
-${historyContext}
+このプルリクエストは以前にもレビューされています。以下の点を重視してください：
+1. 前回のレビューからどのように改善されたかを確認し、成長を認めてください
+2. 修正の試みがあれば、完璧でなくても前向きに評価してください
+3. 改善された部分は具体的に褒めて、成長を強調してください
+4. まだ改善の余地がある点は、次のステップとして何をすべきか提案してください
+5. 最低限動作するコードになっているかを確認してください
 `
     : ""
 }
 
 # 評価基準（新入社員向け）
-評価は厳しすぎないようにしてください。以下は参考程度の基準です：
+教育目的のレビューのため、すべての問題に対して公平に問題意識を持たせるよう指導してください：
 
 ${Object.entries(CodeEvaluationCriteria)
   .map(([category, criteria]) => {
@@ -1360,45 +1361,48 @@ ${Object.entries(CodeEvaluationCriteria)
   .join("\n")}
 
 # 評価方法
-以下の情報を含むフィードバックを JSON 配列形式で生成してください：
-1. category: 該当する評価基準のカテゴリ (code_quality, security, performance, best_practice, readability, functionality, maintainability, architecture, other のいずれか)
-2. problem_point: 改善点の説明（前向きな表現を心がけてください）
-3. suggestion: 改善するためのアドバイス（押し付けではなく提案として）
-4. priority: 優先度 (high, medium, low のいずれか)
-5. code_snippet: 該当する部分のコード (省略可)
-6. reference_url: 参考資料へのリンク (省略可)
-7. is_checked: この基準を満たしているかどうか (true/false)
+以下の情報を含むフィードバックを JSON 配列形式で生成してください。良い点と改善点を明確に区別して記述します：
+
+1. feedback_type: フィードバックの種類 ("strength" = 良い点, "improvement" = 改善点)
+2. category: 該当する評価基準のカテゴリ
+3. point: 良い点または改善点の説明（具体的に何が良いか、何を改善すべきか）
+4. suggestion: 改善点の場合の具体的なアドバイス（良い点の場合は省略可）
+5. code_snippet: 問題点となっているコード(解答コードではない)
+6. reference_url: 学習に役立つ参考資料へのリンク（省略可）
 
 # 評価の重要ポイント
-- 新入社員向けのレビューであることを念頭に置いてください
-- 厳しすぎないように、ある程度のコードなら許容してください
-- セキュリティや明らかなバグ以外は、中～低優先度に設定してください
-- 良い部分も見つけて評価してください
-- ベストプラクティスは「必須」ではなく「推奨」として伝えてください
-- 完璧を求めず、成長の過程を尊重してください
-- 各カテゴリから最低1つ以上の良い点も指摘してください
-- 再レビュー時は、少しでも改善があれば「解決」と判断してください
+- 良い点は必ず "strength" タイプ、改善点は必ず "improvement" タイプとして区別すること
+- 各カテゴリに対して少なくとも1つの良い点を見つけるよう努めてください
+- すべての問題は公平に扱い、優先度による区別はしないでください
+- 特に初心者が躓きやすい点については、詳細な説明と具体的な改善例を示してください
+- 新入社員が自発的に学ぶための参考資料へのリンクを積極的に提案してください
+- 再レビュー時は、前回からの成長を積極的に評価し、次のステップを明確に示してください
 
 # 出力形式
 必ず以下の JSON 配列形式のみで回答してください：
 
 [
   {
-    "category": "code_quality",
-    "problem_point": "改善点の説明",
-    "suggestion": "改善提案",
-    "priority": "medium",
-    "code_snippet": "該当コード例",
-    "reference_url": "https://example.com/reference",
-    "is_checked": false
+    "feedback_type": "strength", 
+    "category": "readability",
+    "point": "関数名が明確で目的がよく理解できます",
+    "code_snippet": "function calculateTotalPrice(items) { ... }"
+  },
+  {
+    "feedback_type": "improvement",
+    "category": "performance",
+    "point": "ループ内でDOM操作を行っているため、処理が非効率になっています",
+    "suggestion": "DOMの更新をループの外で一度にまとめて行うことで、パフォーマンスが向上します",
+    "code_snippet": "for (let i = 0; i < items.length; i++) { document.getElementById('result').innerHTML += items[i]; }",
+    "reference_url": "https://developer.mozilla.org/ja/docs/Web/API/Document_Fragment"
   }
 ]
 
 # 注意事項
-- 重大な問題でない限り、优先度は「medium」や「low」にしてください
-- is_checked は true/false で返してください
-  - true = この基準を満たしている（問題なし、または許容範囲内）
-  - false = この基準を満たしていない（改善の余地あり）
+- 優先度（高、中、低）による区別はせず、すべての改善点を公平に扱ってください
+- 決して解答を出さず、改善案と参考資料のみを出してください
+- 「良い点」と「改善点」を必ず区別して記述してください
+- 改善点には必ず具体的な suggestion を含めてください
 - JSONの外側にテキストやマークダウンを含めないでください
 
 # 固有トークン
@@ -1446,11 +1450,11 @@ ${formatInstructions}`,
         // フォールバック: 最低限のフィードバックを生成
         return [
           {
-            problem_point: "レビュー結果のパース中にエラーが発生しました",
+            feedback_type: "improvement",
+            category: FeedbackCategory.OTHER,
+            point: "レビュー結果のパース中にエラーが発生しました",
             suggestion:
               "システム管理者に連絡してください。コードの詳細レビューは手動で行ってください。",
-            priority: FeedbackPriority.MEDIUM,
-            category: FeedbackCategory.OTHER,
             review_token:
               context?.reviewToken || `review-token-error-${Date.now()}`,
           },
@@ -1463,13 +1467,13 @@ ${formatInstructions}`,
 
       // 評価結果からフィードバック形式に変換
       return parsedResult.map((item: any) => ({
-        problem_point: item.problem_point,
+        feedback_type: item.feedback_type,
+        category: item.category,
+        point: item.point,
         suggestion: item.suggestion,
-        priority: item.priority,
         code_snippet: item.code_snippet,
         reference_url: item.reference_url,
-        category: item.category,
-        review_token: reviewToken, // 固有トークンを追加
+        review_token: reviewToken,
       }));
     } catch (error) {
       console.error(
@@ -1480,13 +1484,13 @@ ${formatInstructions}`,
       // エラー時のフォールバックレスポンス
       return [
         {
-          problem_point: "レビュー処理中にエラーが発生しました",
+          feedback_type: "improvement",
+          category: FeedbackCategory.OTHER,
+          point: "レビュー処理中にエラーが発生しました",
           suggestion:
             "エラー: " +
             (error instanceof Error ? error.message : String(error)) +
             "。システム管理者に連絡してください。",
-          priority: FeedbackPriority.MEDIUM,
-          category: FeedbackCategory.OTHER,
           review_token:
             context?.reviewToken || `review-token-error-${Date.now()}`,
         },

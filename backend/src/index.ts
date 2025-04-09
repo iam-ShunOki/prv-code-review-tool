@@ -160,7 +160,7 @@ async function initializeGitHubIntegration() {
     if (autoReviewEnabled) {
       const githubPullRequestMonitoringService =
         new GitHubPullRequestMonitoringService();
-      const CHECK_INTERVAL_MS = 15 * 60 * 1000; // 15分間隔
+      const CHECK_INTERVAL_MS = 1 * 60 * 1000; // 1分間隔
       console.log(
         `GitHub PR定期チェックを設定: ${CHECK_INTERVAL_MS / 60000}分間隔`
       );
