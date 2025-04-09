@@ -1,9 +1,17 @@
-import axios, { AxiosInstance } from "axios";
+// backend/src/services/GitHubService.ts
+import axios, { AxiosInstance, AxiosRequestConfig } from "axios";
 import crypto from "crypto";
+import { createWriteStream, promises as fs } from "fs";
+import path from "path";
+import { promisify } from "util";
+import { exec } from "child_process";
+
+const execPromise = promisify(exec);
 
 export class GitHubService {
   private axiosInstance: AxiosInstance | null = null;
   private baseUrl: string = "https://api.github.com";
+  private accessToken: string | null = null;
 
   /**
    * アクセストークンを使用してGitHub APIクライアントを初期化
@@ -15,6 +23,8 @@ export class GitHubService {
     }
 
     try {
+      this.accessToken = accessToken;
+
       // axios インスタンスの作成
       this.axiosInstance = axios.create({
         baseURL: this.baseUrl,
@@ -113,6 +123,31 @@ export class GitHubService {
     } catch (error) {
       console.error("署名検証エラー:", error);
       return false;
+    }
+  }
+
+  /**
+   * リポジトリ情報の取得
+   */
+  async getRepositoryInfo(owner: string, name: string): Promise<any> {
+    if (!this.axiosInstance) {
+      throw new Error("GitHub APIが初期化されていません");
+    }
+
+    try {
+      console.log(`リポジトリ情報を取得: ${owner}/${name}`);
+      const response = await this.axiosInstance.get(`/repos/${owner}/${name}`);
+      return response.data;
+    } catch (error: any) {
+      console.error(`リポジトリ情報取得エラー (${owner}/${name}):`, error);
+
+      if (error.response && error.response.status === 404) {
+        return null; // リポジトリが存在しない場合
+      }
+
+      throw new Error(
+        `リポジトリ情報の取得に失敗しました: ${error.message || "不明なエラー"}`
+      );
     }
   }
 
@@ -420,6 +455,162 @@ export class GitHubService {
       );
       throw new Error(
         `PRの差分を取得できませんでした: ${error.message || "不明なエラー"}`
+      );
+    }
+  }
+
+  /**
+   * リポジトリのクローン
+   */
+  async cloneRepository(
+    owner: string,
+    repo: string,
+    branch: string = "main"
+  ): Promise<string> {
+    // 一時ディレクトリのパス
+    const tempDir = path.join(
+      __dirname,
+      "../../temp",
+      `github_${owner}_${repo}_${Date.now()}`
+    );
+
+    console.log(`GitHub リポジトリをクローン: ${owner}/${repo} -> ${tempDir}`);
+
+    try {
+      // 一時ディレクトリの作成
+      await fs.mkdir(tempDir, { recursive: true });
+
+      // クローンコマンドの構築
+      const tokenAuth = this.accessToken ? `${this.accessToken}@` : "";
+      const cloneUrl = `https://${tokenAuth}github.com/${owner}/${repo}.git`;
+
+      // クローンの実行
+      const { stdout, stderr } = await execPromise(
+        `git clone --depth 1 -b ${branch} ${cloneUrl} ${tempDir}`
+      );
+
+      if (stderr && !stderr.includes("Cloning into")) {
+        console.warn(`クローン警告: ${stderr}`);
+      }
+
+      console.log(`リポジトリ ${owner}/${repo} をクローンしました`);
+      return tempDir;
+    } catch (error) {
+      console.error(`リポジトリクローンエラー (${owner}/${repo}):`, error);
+
+      // 既にディレクトリが存在している場合は削除を試みる
+      try {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      } catch (rmError) {
+        console.error(`一時ディレクトリ削除エラー: ${tempDir}`, rmError);
+      }
+
+      throw new Error(
+        `GitHubリポジトリのクローンに失敗しました: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+  }
+
+  /**
+   * リポジトリのクリーンアップ
+   */
+  async cleanupRepository(repoDir: string): Promise<void> {
+    try {
+      console.log(`リポジトリディレクトリを削除します: ${repoDir}`);
+      await fs.rm(repoDir, { recursive: true, force: true });
+      console.log(`リポジトリディレクトリを削除しました: ${repoDir}`);
+    } catch (error) {
+      console.error(`リポジトリディレクトリ削除エラー: ${repoDir}`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * コミット情報の取得
+   */
+  async getCommitInfo(owner: string, repo: string, sha: string): Promise<any> {
+    if (!this.axiosInstance) {
+      throw new Error("GitHub APIが初期化されていません");
+    }
+
+    try {
+      console.log(`コミット情報を取得: ${owner}/${repo}@${sha}`);
+      const response = await this.axiosInstance.get(
+        `/repos/${owner}/${repo}/commits/${sha}`
+      );
+      return response.data;
+    } catch (error: any) {
+      console.error(`コミット情報取得エラー (${owner}/${repo}@${sha}):`, error);
+      throw new Error(
+        `コミット情報の取得に失敗しました: ${error.message || "不明なエラー"}`
+      );
+    }
+  }
+
+  /**
+   * リポジトリのブランチ一覧を取得
+   */
+  async getRepositoryBranches(owner: string, repo: string): Promise<any[]> {
+    if (!this.axiosInstance) {
+      throw new Error("GitHub APIが初期化されていません");
+    }
+
+    try {
+      console.log(`ブランチ一覧を取得: ${owner}/${repo}`);
+      const response = await this.axiosInstance.get(
+        `/repos/${owner}/${repo}/branches`,
+        {
+          params: { per_page: 100 },
+        }
+      );
+      return response.data;
+    } catch (error: any) {
+      console.error(`ブランチ一覧取得エラー (${owner}/${repo}):`, error);
+      throw new Error(
+        `ブランチ一覧の取得に失敗しました: ${error.message || "不明なエラー"}`
+      );
+    }
+  }
+
+  /**
+   * ファイル内容の取得
+   */
+  async getFileContent(
+    owner: string,
+    repo: string,
+    path: string,
+    ref: string = "main"
+  ): Promise<string> {
+    if (!this.axiosInstance) {
+      throw new Error("GitHub APIが初期化されていません");
+    }
+
+    try {
+      console.log(`ファイル内容を取得: ${owner}/${repo}/${path}@${ref}`);
+      const response = await this.axiosInstance.get(
+        `/repos/${owner}/${repo}/contents/${path}`,
+        {
+          params: { ref },
+        }
+      );
+
+      // Base64デコード
+      if (response.data.encoding === "base64") {
+        return Buffer.from(response.data.content, "base64").toString("utf-8");
+      } else {
+        throw new Error(
+          `サポートされていないエンコーディング: ${response.data.encoding}`
+        );
+      }
+    } catch (error: any) {
+      console.error(
+        `ファイル内容取得エラー (${owner}/${repo}/${path}@${ref}):`,
+        error
+      );
+      throw new Error(
+        `ファイル内容の取得に失敗しました: ${error.message || "不明なエラー"}`
       );
     }
   }

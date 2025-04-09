@@ -8,6 +8,7 @@ import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/use-toast";
 import { UsageLimitSettings } from "@/components/admin/UsageLimitSettings";
+import { GitHubRepositoryList } from "@/components/github/GitHubRepositoryList";
 import {
   AlertCircle,
   UserCog,
@@ -15,6 +16,8 @@ import {
   Shield,
   Bell,
   User,
+  Github,
+  Server,
 } from "lucide-react";
 
 export default function SettingsPage() {
@@ -55,6 +58,11 @@ export default function SettingsPage() {
       id: "usage-limits",
       label: "利用制限",
       component: <UsageLimitSettings />,
+    },
+    {
+      id: "github",
+      label: "GitHub連携",
+      component: <GitHubRepositoryList />,
     },
     {
       id: "system",
@@ -145,7 +153,16 @@ export default function SettingsPage() {
             >
               <TabsList className="mb-6">
                 {adminTabs.map((tab) => (
-                  <TabsTrigger key={tab.id} value={tab.id}>
+                  <TabsTrigger
+                    key={tab.id}
+                    value={tab.id}
+                    className="flex items-center"
+                  >
+                    {tab.id === "github" && <Github className="w-4 h-4 mr-2" />}
+                    {tab.id === "usage-limits" && (
+                      <UserCog className="w-4 h-4 mr-2" />
+                    )}
+                    {tab.id === "system" && <Server className="w-4 h-4 mr-2" />}
                     {tab.label}
                   </TabsTrigger>
                 ))}

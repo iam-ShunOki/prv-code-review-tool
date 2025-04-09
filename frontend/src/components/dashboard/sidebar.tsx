@@ -63,6 +63,24 @@ export function Sidebar() {
 
   const isAdmin = user?.role === "admin";
 
+  // パス比較関数を修正（startsWith方式）
+  const isPathActive = (path: string) => {
+    // 完全一致の場合
+    if (pathname === path) return true;
+
+    // ルートパスの場合は完全一致のみを考慮
+    if (path === "/dashboard") {
+      return pathname === "/dashboard";
+    }
+
+    // その他のパスは前方一致を確認（サブパスを含む）
+    if (path !== "/dashboard" && pathname?.startsWith(path + "/")) {
+      return true;
+    }
+
+    return false;
+  };
+
   const navigation = [
     { name: "ダッシュボード", href: "/dashboard", icon: Home },
     {
@@ -164,13 +182,12 @@ export function Sidebar() {
                 className={`
                   flex items-center px-4 py-2 rounded-md text-sm font-medium
                   ${
-                    pathname === item.href ||
-                    pathname.startsWith(item.href + "/")
+                    isPathActive(item.href)
                       ? "bg-indigo-100 text-indigo-700"
                       : "text-gray-700 hover:bg-gray-100"
                   }
                 `}
-                aria-current={pathname === item.href ? "page" : undefined}
+                aria-current={isPathActive(item.href) ? "page" : undefined}
               >
                 <item.icon className="mr-3 h-5 w-5" aria-hidden="true" />
                 <span className="flex-1">{item.name}</span>
