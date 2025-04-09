@@ -21,6 +21,9 @@ import { EvaluationCriteria } from "./models/EvaluationCriteria";
 import { ChatMessage } from "./models/ChatMessage";
 import { YearlyCriteriaSetting } from "./models/YearlyCriteriaSetting";
 import { AcademicYearSetting } from "./models/AcademicYearSetting";
+import { GitHubRepository } from "./models/GitHubRepository";
+import { GitHubPullRequestTracker } from "./models/GitHubPullRequestTracker";
+
 import { InitialSchema1625000000000 } from "./migrations/1625000000000-InitialSchema";
 import { AddSessionsTable1625000000100 } from "./migrations/1625000000100-AddSessionsTable";
 import { AddNotificationSettingsTable1625000000200 } from "./migrations/1625000000200-AddNotificationSettingsTable";
@@ -42,6 +45,8 @@ import { AddParentMessageIdToChatMessages1625000001700 } from "./migrations/1625
 import { EnhancePullRequestTracker1625000001800 } from "./migrations/1625000001800-EnhancePullRequestTracker";
 import { AddProcessedCommentIds1625000001900 } from "./migrations/1625000001900-AddProcessedCommentIds";
 import { AddDescriptionProcessedToPullRequestTrackers1625000002000 } from "./migrations/1625000002000-AddDescriptionProcessedToPullRequestTrackers";
+import { CreateGitHubRepositoryTable1625000002100 } from "./migrations/1625000002100-CreateGitHubRepositoryTable";
+import { CreateGitHubPullRequestTracker1625000002200 } from "./migrations/1625000002200-CreateGitHubPullRequestTracker";
 // 環境変数の読み込み
 dotenv.config();
 
@@ -75,6 +80,8 @@ export const AppDataSource = new DataSource({
     ChatMessage,
     YearlyCriteriaSetting,
     AcademicYearSetting,
+    GitHubRepository,
+    GitHubPullRequestTracker,
   ],
   migrations: [
     InitialSchema1625000000000,
@@ -98,6 +105,8 @@ export const AppDataSource = new DataSource({
     EnhancePullRequestTracker1625000001800,
     AddProcessedCommentIds1625000001900,
     AddDescriptionProcessedToPullRequestTrackers1625000002000,
+    CreateGitHubRepositoryTable1625000002100,
+    CreateGitHubPullRequestTracker1625000002200,
   ],
   subscribers: [],
 

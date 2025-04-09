@@ -10,7 +10,8 @@ import { RepositoryWhitelistService } from "./services/RepositoryWhitelistServic
 import { ReviewFeedbackSenderService } from "./services/ReviewFeedbackSenderService";
 import { BacklogService } from "./services/BacklogService";
 import { MentionDetectionService } from "./services/MentionDetectionService";
-
+import { GitHubRepository } from "./models/GitHubRepository";
+import { GitHubPullRequestMonitoringService } from "./services/GitHubPullRequestMonitoringService";
 // 環境変数の読み込み
 dotenv.config();
 
@@ -99,7 +100,10 @@ async function initializePullRequestMonitoring() {
         console.log(
           "定期チェック実行: プルリクエストの未処理@codereviewをスキャン中..."
         );
-        await checkAllPullRequests();
+        // await checkAllPullRequests();
+        console.log("=========================================");
+        console.log("\n\nGithub連携のテスト中なので、コメントだけ...\n\n");
+        console.log("=========================================");
       } catch (error) {
         console.error("定期チェック処理中にエラーが発生しました:", error);
       }
@@ -111,6 +115,76 @@ async function initializePullRequestMonitoring() {
       "プルリクエストモニタリングの初期化中にエラーが発生しました:",
       error
     );
+  }
+}
+
+/**
+ * GitHub連携の初期化
+ */
+async function initializeGitHubIntegration() {
+  try {
+    console.log("=========================================");
+    console.log("GitHub連携機能を初期化しています...");
+    console.log("=========================================");
+
+    // 環境変数チェック
+    if (process.env.GITHUB_INTEGRATION_ENABLED !== "true") {
+      console.log(
+        "GitHub連携は無効に設定されています。GITHUB_INTEGRATION_ENABLED=trueに設定することで有効化できます。"
+      );
+      return;
+    }
+
+    // GitHubリポジトリの読み込み
+    const githubRepositoryRepo = AppDataSource.getRepository(GitHubRepository);
+    const repositories = await githubRepositoryRepo.find({
+      where: { is_active: true },
+    });
+
+    console.log(`アクティブなGitHubリポジトリ: ${repositories.length}件`);
+
+    // Webhook URLの初期化と表示
+    const baseUrl = process.env.SERVER_BASE_URL || `http://localhost:${PORT}`;
+    const webhookUrl = `${baseUrl}/api/github/webhook`;
+    console.log(`GitHub Webhook URL: ${webhookUrl}`);
+    console.log(
+      `Webhook Secret: ${
+        process.env.GITHUB_WEBHOOK_SECRET ? "設定済み" : "未設定"
+      }`
+    );
+
+    // 自動レビュー機能の状態確認
+    const autoReviewEnabled = process.env.GITHUB_AUTO_REVIEW_ENABLED === "true";
+    console.log(`自動レビュー機能: ${autoReviewEnabled ? "有効" : "無効"}`);
+
+    // 定期チェックの設定（未処理PR確認）
+    if (autoReviewEnabled) {
+      const githubPullRequestMonitoringService =
+        new GitHubPullRequestMonitoringService();
+      const CHECK_INTERVAL_MS = 0.5 * 60 * 1000; // 0.5分間隔
+      console.log(
+        `GitHub PR定期チェックを設定: ${CHECK_INTERVAL_MS / 60000}分間隔`
+      );
+
+      setInterval(async () => {
+        try {
+          console.log(
+            "定期チェック実行: GitHub PRの未処理@codereviewをスキャン中..."
+          );
+          // TODO: ここに定期チェック処理を実装
+          await githubPullRequestMonitoringService.checkExistingPullRequests();
+        } catch (error) {
+          console.error(
+            "GitHub定期チェック処理中にエラーが発生しました:",
+            error
+          );
+        }
+      }, CHECK_INTERVAL_MS);
+    }
+
+    console.log("GitHub連携機能の初期化が完了しました");
+  } catch (error) {
+    console.error("GitHub連携機能の初期化中にエラーが発生しました:", error);
   }
 }
 
@@ -280,6 +354,11 @@ async function startServer() {
             error
           );
         });
+
+        // GitHub連携の初期化を追加
+        initializeGitHubIntegration().catch((error) => {
+          console.error("GitHub連携初期化でエラーが発生しました:", error);
+        });
       }, 2000);
     });
   } catch (error) {
@@ -369,6 +448,7 @@ import dashboardRoutes from "./routes/dashboardRoutes";
 import chatRoutes from "./routes/chatRoutes";
 import learningChatRoutes from "./routes/learningChatRoutes";
 import evaluationCriteriaRoutes from "./routes/evaluationCriteriaRoutes";
+import githubRoutes from "./routes/githubRoutes";
 // ルートの登録
 app.use("/api/auth", authRoutes);
 app.use("/api/reviews", reviewRoutes);
@@ -391,6 +471,7 @@ app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/chat", chatRoutes);
 app.use("/api/learning-chat", learningChatRoutes);
 app.use("/api/evaluation-criteria", evaluationCriteriaRoutes);
+app.use("/api/github", githubRoutes);
 // エラーハンドリング強化
 app.use(
   (
