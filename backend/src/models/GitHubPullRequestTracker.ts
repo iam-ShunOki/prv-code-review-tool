@@ -1,3 +1,4 @@
+// backend/src/models/GitHubPullRequestTracker.ts
 import {
   Entity,
   PrimaryGeneratedColumn,
@@ -37,7 +38,7 @@ export class GitHubPullRequestTracker {
   @Column({ type: "text", nullable: true })
   review_history: string;
 
-  @Column({ type: "text", default: "[]" })
+  @Column({ type: "text", nullable: true, default: "[]" })
   processed_comment_ids: string;
 
   @Column({ default: false })
@@ -46,7 +47,11 @@ export class GitHubPullRequestTracker {
   @CreateDateColumn()
   created_at: Date;
 
-  @ManyToOne(() => GitHubRepository, { onDelete: "CASCADE" })
+  @ManyToOne(
+    () => GitHubRepository,
+    (repository) => repository.pullRequestTrackers,
+    { onDelete: "CASCADE" }
+  )
   @JoinColumn({ name: "repository_id" })
   repository: GitHubRepository;
 }

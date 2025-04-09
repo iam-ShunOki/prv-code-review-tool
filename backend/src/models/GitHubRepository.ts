@@ -1,10 +1,13 @@
+// backend/src/models/GitHubRepository.ts
 import {
   Entity,
   PrimaryGeneratedColumn,
   Column,
   CreateDateColumn,
   UpdateDateColumn,
+  OneToMany,
 } from "typeorm";
+import { GitHubPullRequestTracker } from "./GitHubPullRequestTracker";
 
 @Entity("github_repositories")
 export class GitHubRepository {
@@ -34,4 +37,7 @@ export class GitHubRepository {
 
   @UpdateDateColumn()
   updated_at: Date;
+
+  @OneToMany(() => GitHubPullRequestTracker, (tracker) => tracker.repository)
+  pullRequestTrackers: GitHubPullRequestTracker[];
 }

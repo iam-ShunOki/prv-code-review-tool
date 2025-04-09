@@ -43,7 +43,11 @@
     "glob": "^10.3.10",
     "pdfmake": "^0.2.8",
     "pg": "8.14.0",
-    "exceljs": "4.4.0"
+    "exceljs": "4.4.0",
+    "markdown-it": "^14.1.0",
+    "p-retry": "^6.2.1",
+    "p-queue": "^8.1.0",
+    "diff": "^7.0.0"
   },
   "devDependencies": {
     "@types/bcrypt": "^5.0.0",

@@ -20,6 +20,7 @@ import {
 } from "../constants/CodeEvaluationCriteria";
 import { BacklogService } from "./BacklogService";
 import { RepositoryVectorSearchService } from "./RepositoryVectorSearchService";
+import { GitHubService } from "./GitHubService";
 
 // プルリクエストレビューのコンテキスト型
 interface PullRequestReviewContext {
@@ -34,6 +35,18 @@ interface PullRequestReviewContext {
   codeChangeSummary?: string; // コード変更サマリー
 }
 
+// GitHubプルリクエストレビューのコンテキスト型を定義
+interface GitHubPullRequestReviewContext {
+  isReReview?: boolean;
+  reviewHistory?: any[];
+  comments?: any[];
+  reviewToken?: string;
+  sourceCommentId?: number;
+  isDescriptionRequest?: boolean;
+  isPrUpdate?: boolean;
+  previousFeedbacks?: any[];
+  codeChangeSummary?: string;
+}
 export class AIService {
   // private model: ChatOpenAI;
   private model: ChatAnthropic;
@@ -1182,6 +1195,401 @@ ${outputParser.getFormatInstructions()}
       return `// コード抽出エラー: ${
         error instanceof Error ? error.message : String(error)
       }\n// プルリクエストのコードを手動で確認してください。`;
+    }
+  }
+
+  /**
+   * GitHub PRのコードをレビュー
+   */
+  async reviewGitHubPullRequest(
+    owner: string,
+    repo: string,
+    pullRequestId: number,
+    context?: GitHubPullRequestReviewContext
+  ): Promise<
+    Array<{
+      problem_point: string;
+      suggestion: string;
+      priority: FeedbackPriority;
+      code_snippet?: string;
+      reference_url?: string;
+      category?: FeedbackCategory;
+      review_token?: string;
+    }>
+  > {
+    console.log(
+      `GitHub PR #${pullRequestId} (${owner}/${repo}) のレビューを開始します ${
+        context?.isReReview ? "【再レビュー】" : "【初回レビュー】"
+      }${context?.isDescriptionRequest ? " 【説明文由来】" : ""}${
+        context?.isPrUpdate ? " 【PR更新】" : ""
+      }`
+    );
+
+    try {
+      // GitHubサービスを取得 (GitHubServiceは別途インポートが必要)
+      // 注: このコードをAIService.tsに追加する際はGitHubServiceをインポートしてください
+      const githubService = new GitHubService();
+
+      // PR差分を取得
+      const diffData = await githubService.getPullRequestDiff(
+        owner,
+        repo,
+        pullRequestId
+      );
+
+      // 差分からコードを抽出
+      let codeContent = "";
+      if (typeof diffData === "string") {
+        codeContent = diffData;
+      } else {
+        codeContent = this.extractCodeFromGitHubDiff(diffData);
+      }
+
+      // レビュートークンの決定
+      const reviewToken =
+        context?.reviewToken ||
+        `github-review-${owner}-${repo}-${pullRequestId}-${Date.now()}`;
+
+      // 再レビュー時の前回フィードバックチェック処理
+      // この実装は省略しています
+
+      // プロンプトフォーマットをより明確に
+      const outputParser = StructuredOutputParser.fromZodSchema(
+        z.array(
+          z.object({
+            category: z.nativeEnum(FeedbackCategory),
+            problem_point: z.string(),
+            suggestion: z.string(),
+            priority: z.nativeEnum(FeedbackPriority),
+            code_snippet: z.string().optional(),
+            reference_url: z.string().optional(),
+            is_checked: z.boolean(),
+          })
+        )
+      );
+
+      const formatInstructions = outputParser.getFormatInstructions();
+
+      // PR情報の取得
+      let prInfo = {
+        title: "Pull Request",
+        description: "",
+        base: "main",
+        head: "feature",
+      };
+
+      if (diffData && typeof diffData === "object" && diffData.pullRequest) {
+        prInfo = {
+          title: diffData.pullRequest.title || diffData.pullRequest.number,
+          description: diffData.pullRequest.description || "",
+          base: diffData.pullRequest.base || "main",
+          head: diffData.pullRequest.head || "feature",
+        };
+      }
+
+      // 過去のレビュー履歴処理の改善
+      let historyContext = "";
+      let checkedItemsContext = "";
+      let pendingItemsContext = "";
+
+      // 前回のレビュー情報がある場合は処理（詳細実装は省略）
+
+      // 強化したプロンプト
+      const messages = [
+        {
+          role: "system",
+          content:
+            "あなたは親切で育成志向のコードレビュアーです。新入社員のプログラミング学習を支援するため、励ましながらも的確なアドバイスを提供してください。完璧さよりも成長を重視し、良い部分は積極的に評価してください。指定された形式で結果を返し、必ず以下のルールを守ってください:\n\n1. 応答は純粋なJSONのみを含めること\n2. マークダウンのコードブロック (```) で囲まないこと\n3. 最初から最後まで有効なJSON配列のみを返すこと\n4. JSON配列は必ず [ で始まり ] で終わること\n5. JSONの前後に他のテキストを含めないこと\n6. JSONコメント(// や /* */)を含めないこと",
+        },
+        {
+          role: "user",
+          content: `以下のGitHub Pull Requestをレビューし、新入社員の成長を促す前向きなフィードバックを生成してください。
+        
+# Pull Request情報
+- PR番号: #${pullRequestId}
+- リポジトリ: ${owner}/${repo}
+- タイトル: ${prInfo.title}
+- 説明: ${prInfo.description || "説明なし"}
+- ベースブランチ: ${prInfo.base}
+- 作成ブランチ: ${prInfo.head}
+
+${
+  context?.codeChangeSummary
+    ? `# コード変更情報\n${context.codeChangeSummary}\n\n`
+    : ""
+}
+
+${
+  context?.isReReview
+    ? `
+# 再レビュー指示
+このプルリクエストは以前にもレビューされています。以下の点に注意してください：
+1. 前回のレビューで指摘された問題に対する改善努力を評価してください
+2. 完璧でなくても、改善の方向性が正しければ前向きに評価してください
+3. 良くなった部分は積極的に褒めてください
+4. 引き続き改善が必要な点は優しく提案してください
+
+${historyContext}
+`
+    : ""
+}
+
+# 評価基準（新入社員向け）
+評価は厳しすぎないようにしてください。以下は参考程度の基準です：
+
+${Object.entries(CodeEvaluationCriteria)
+  .map(([category, criteria]) => {
+    return (
+      `\n## ${this.getCategoryDisplayName(category as FeedbackCategory)}\n` +
+      criteria.map((item, index) => `${index + 1}. ${item}`).join("\n")
+    );
+  })
+  .join("\n")}
+
+# 評価方法
+以下の情報を含むフィードバックを JSON 配列形式で生成してください：
+1. category: 該当する評価基準のカテゴリ (code_quality, security, performance, best_practice, readability, functionality, maintainability, architecture, other のいずれか)
+2. problem_point: 改善点の説明（前向きな表現を心がけてください）
+3. suggestion: 改善するためのアドバイス（押し付けではなく提案として）
+4. priority: 優先度 (high, medium, low のいずれか)
+5. code_snippet: 該当する部分のコード (省略可)
+6. reference_url: 参考資料へのリンク (省略可)
+7. is_checked: この基準を満たしているかどうか (true/false)
+
+# 評価の重要ポイント
+- 新入社員向けのレビューであることを念頭に置いてください
+- 厳しすぎないように、ある程度のコードなら許容してください
+- セキュリティや明らかなバグ以外は、中～低優先度に設定してください
+- 良い部分も見つけて評価してください
+- ベストプラクティスは「必須」ではなく「推奨」として伝えてください
+- 完璧を求めず、成長の過程を尊重してください
+- 各カテゴリから最低1つ以上の良い点も指摘してください
+- 再レビュー時は、少しでも改善があれば「解決」と判断してください
+
+# 出力形式
+必ず以下の JSON 配列形式のみで回答してください：
+
+[
+  {
+    "category": "code_quality",
+    "problem_point": "改善点の説明",
+    "suggestion": "改善提案",
+    "priority": "medium",
+    "code_snippet": "該当コード例",
+    "reference_url": "https://example.com/reference",
+    "is_checked": false
+  }
+]
+
+# 注意事項
+- 重大な問題でない限り、优先度は「medium」や「low」にしてください
+- is_checked は true/false で返してください
+  - true = この基準を満たしている（問題なし、または許容範囲内）
+  - false = この基準を満たしていない（改善の余地あり）
+- JSONの外側にテキストやマークダウンを含めないでください
+
+# 固有トークン
+このレビューの固有識別トークン: ${reviewToken}
+
+# Pull Requestのコード内容
+\`\`\`
+${codeContent}
+\`\`\`
+
+${formatInstructions}`,
+        },
+      ];
+
+      // モデルを呼び出す
+      const result = await this.model.invoke(messages);
+
+      // 結果をパースする - エラーハンドリングを強化
+      let parsedResult;
+      try {
+        // コンテンツを抽出（複数形式に対応）
+        const resultText =
+          typeof result.content === "string"
+            ? result.content
+            : Array.isArray(result.content)
+            ? result.content
+                .map((item) =>
+                  typeof item === "object" && "text" in item ? item.text : ""
+                )
+                .join("")
+            : "";
+
+        console.log(
+          "AIからの応答の最初の500文字:",
+          resultText.substring(0, 500)
+        );
+
+        // 専用の堅牢なJSON解析関数を使用
+        parsedResult = this.parseAIJsonResponse(resultText, reviewToken);
+
+        console.log(`パース結果: ${parsedResult.length}件のフィードバック`);
+      } catch (parseError) {
+        console.error("出力パース中にエラーが発生しました:", parseError);
+
+        // フォールバック: 最低限のフィードバックを生成
+        return [
+          {
+            problem_point: "レビュー結果のパース中にエラーが発生しました",
+            suggestion:
+              "システム管理者に連絡してください。コードの詳細レビューは手動で行ってください。",
+            priority: FeedbackPriority.MEDIUM,
+            category: FeedbackCategory.OTHER,
+            review_token:
+              context?.reviewToken || `review-token-error-${Date.now()}`,
+          },
+        ];
+      }
+
+      console.log(
+        `PR #${pullRequestId} の評価結果: ${parsedResult.length} 件のフィードバックが生成されました`
+      );
+
+      // 評価結果からフィードバック形式に変換
+      return parsedResult.map((item: any) => ({
+        problem_point: item.problem_point,
+        suggestion: item.suggestion,
+        priority: item.priority,
+        code_snippet: item.code_snippet,
+        reference_url: item.reference_url,
+        category: item.category,
+        review_token: reviewToken, // 固有トークンを追加
+      }));
+    } catch (error) {
+      console.error(
+        `PR #${pullRequestId} (${owner}/${repo}) のレビュー中にエラーが発生しました:`,
+        error
+      );
+
+      // エラー時のフォールバックレスポンス
+      return [
+        {
+          problem_point: "レビュー処理中にエラーが発生しました",
+          suggestion:
+            "エラー: " +
+            (error instanceof Error ? error.message : String(error)) +
+            "。システム管理者に連絡してください。",
+          priority: FeedbackPriority.MEDIUM,
+          category: FeedbackCategory.OTHER,
+          review_token:
+            context?.reviewToken || `review-token-error-${Date.now()}`,
+        },
+      ];
+    }
+  }
+
+  /**
+   * GitHub PR差分からコード内容を抽出
+   */
+  private extractCodeFromGitHubDiff(diffData: any): string {
+    console.log("GitHub差分データからコード内容を抽出します");
+
+    // デバッグ情報
+    console.log(`差分データの型: ${typeof diffData}`);
+    if (typeof diffData === "object") {
+      console.log(`差分データのキー: ${Object.keys(diffData).join(", ")}`);
+      if (diffData.changedFiles) {
+        console.log(`変更されたファイル数: ${diffData.changedFiles.length}`);
+      }
+    }
+
+    // 抽出情報を保持する文字列
+    let extractedCode = "";
+
+    try {
+      // PR情報を取得
+      if (diffData.pullRequest) {
+        const pr = diffData.pullRequest;
+        extractedCode += `// Pull Request #${pr.number}: ${pr.title}\n`;
+        extractedCode += `// ブランチ: ${pr.head}\n`;
+        extractedCode += `// ベース: ${pr.base}\n\n`;
+      }
+
+      // changedFilesがある場合の処理
+      if (diffData.changedFiles && Array.isArray(diffData.changedFiles)) {
+        // 各変更ファイルを処理
+        for (const file of diffData.changedFiles) {
+          if (file.filePath) {
+            extractedCode += `\n// ファイル: ${file.filePath}\n`;
+
+            // 差分があればそれを追加
+            if (file.diff) {
+              // 差分からコード部分を抽出（+で始まる行）
+              const diffLines = file.diff.split("\n");
+              const codeLines = diffLines
+                .filter(
+                  (line: string) =>
+                    line.startsWith("+") && !line.startsWith("+++")
+                )
+                .map((line: string) => line.substring(1));
+
+              if (codeLines.length > 0) {
+                extractedCode += `\`\`\`\n${codeLines.join("\n")}\n\`\`\`\n\n`;
+              }
+            }
+
+            // コンテンツがあればそれも追加（削除ファイル以外）
+            if (file.fullContent && file.status !== "deleted") {
+              // ファイルが大きすぎる場合は一部のみ
+              const contentSnippet =
+                file.fullContent.length > 2000
+                  ? file.fullContent.substring(0, 2000) + "\n// ... (省略) ..."
+                  : file.fullContent;
+
+              if (!file.diff || !extractedCode.includes("```")) {
+                // 差分から抽出したコードがなければ
+                extractedCode += `\`\`\`\n${contentSnippet}\n\`\`\`\n\n`;
+              }
+            }
+          }
+        }
+      }
+
+      // 内容がない場合のフォールバック
+      if (
+        !extractedCode ||
+        extractedCode.trim() === "" ||
+        !extractedCode.includes("```")
+      ) {
+        // 最小限のフォールバックコード
+        extractedCode = `// Pull Request #${
+          diffData.pullRequest?.number || "?"
+        } の変更内容\n`;
+        extractedCode += `// 注意: 自動的に抽出できたコードが限られています。レビュー時に考慮してください。\n\n`;
+
+        // PRの詳細情報を追加
+        if (diffData.pullRequest) {
+          extractedCode += `// タイトル: ${diffData.pullRequest.title}\n`;
+          if (diffData.pullRequest.description) {
+            extractedCode += `// 説明: ${diffData.pullRequest.description.substring(
+              0,
+              200
+            )}${diffData.pullRequest.description.length > 200 ? "..." : ""}\n`;
+          }
+        }
+
+        // ファイル名だけでも表示
+        if (diffData.changedFiles && Array.isArray(diffData.changedFiles)) {
+          extractedCode += `\n// 変更ファイル一覧:\n`;
+          diffData.changedFiles.forEach((file: any) => {
+            if (file.filePath) {
+              extractedCode += `// - ${file.filePath} (${
+                file.status || "unknown"
+              })\n`;
+            }
+          });
+        }
+      }
+
+      return extractedCode;
+    } catch (error) {
+      console.error("GitHub差分からコード抽出中にエラーが発生しました:", error);
+      return `// コード抽出エラー: ${
+        error instanceof Error ? error.message : String(error)
+      }\n// Pull Requestのコードを手動で確認してください。`;
     }
   }
 }

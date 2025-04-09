@@ -4,6 +4,7 @@ import { AppDataSource } from "../index";
 import { GitHubRepository } from "../models/GitHubRepository";
 import { GitHubPullRequestTracker } from "../models/GitHubPullRequestTracker";
 import { MentionDetectionService } from "../services/MentionDetectionService";
+import { GitHubPullRequestMonitoringService } from "../services/GitHubPullRequestMonitoringService";
 
 export class GitHubWebhookController {
   private githubService: GitHubService;
@@ -155,6 +156,12 @@ export class GitHubWebhookController {
         return;
       }
 
+      // 自動レビューが無効ならスキップ
+      if (!repositoryConfig.allow_auto_review) {
+        console.log(`リポジトリ ${owner}/${repo} では自動レビューが無効です`);
+        return;
+      }
+
       // APIクライアントを初期化
       this.githubService.initializeWithToken(repositoryConfig.access_token);
 
@@ -179,8 +186,8 @@ export class GitHubWebhookController {
           return;
         }
 
-        // [実装予定] ここでAIレビュー処理を実行
-        console.log(`PR #${prNumber} のAIレビューを開始します（実装予定）`);
+        // AIレビュー処理を実行
+        await this.initiateAIReview(owner, repo, prNumber);
 
         // 処理としてマーク
         await this.markPRAsProcessed(
@@ -200,9 +207,7 @@ export class GitHubWebhookController {
     }
   };
 
-  /**
-   * Issueコメントイベント（PRへのコメント）を処理
-   */
+  // processIssueCommentEvent メソッドを強化します
   private processIssueCommentEvent = async (payload: any): Promise<void> => {
     const { action, comment, issue, repository } = payload;
     const owner = repository.owner.login;
@@ -259,8 +264,8 @@ export class GitHubWebhookController {
         return;
       }
 
-      // [実装予定] ここでAIレビュー処理を実行
-      console.log(`PR #${prNumber} のAIレビューを開始します（実装予定）`);
+      // AIレビュー処理を実行
+      await this.initiateAIReview(owner, repo, prNumber, commentId);
 
       // コメントIDを処理済みとしてマーク
       await this.markCommentAsProcessed(
@@ -276,6 +281,42 @@ export class GitHubWebhookController {
       );
     }
   };
+
+  // AIレビュー実行メソッドを追加
+  /**
+   * AIレビューを実行する
+   */
+  private async initiateAIReview(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    commentId?: number
+  ): Promise<void> {
+    console.log(`PR #${prNumber} (${owner}/${repo}) のAIレビューを開始します`);
+
+    try {
+      // GitHubPullRequestMonitoringServiceのインスタンスを作成
+      const monitoringService = new GitHubPullRequestMonitoringService();
+
+      // レビュー実行
+      const result = await monitoringService.checkSinglePullRequest(
+        owner,
+        repo,
+        prNumber,
+        commentId
+      );
+
+      console.log(
+        `PR #${prNumber} のAIレビュー実行結果: ${result ? "成功" : "失敗"}`
+      );
+    } catch (error) {
+      console.error(
+        `AIレビュー実行エラー (${owner}/${repo}#${prNumber}):`,
+        error
+      );
+      throw error;
+    }
+  }
 
   /**
    * PR Review Commentイベントを処理

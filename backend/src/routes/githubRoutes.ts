@@ -8,34 +8,43 @@ const router = express.Router();
 const githubWebhookController = new GitHubWebhookController();
 const githubRepositoryController = new GitHubRepositoryController();
 
-// GitHub Webhook エンドポイント
+// Webhookエンドポイント (認証なし)
 router.post("/webhook", githubWebhookController.handleWebhook);
 
-// リポジトリ管理API（認証と管理者権限が必要）
+// リポジトリ関連API (認証あり)
 router.get(
   "/repositories",
   authenticate,
-  requireAdmin,
   githubRepositoryController.getAllRepositories
 );
+
+router.get(
+  "/repositories/:id",
+  authenticate,
+  githubRepositoryController.getRepositoryById
+);
+
 router.post(
   "/repositories",
   authenticate,
   requireAdmin,
   githubRepositoryController.createRepository
 );
-router.get(
-  "/repositories/:id",
-  authenticate,
-  requireAdmin,
-  githubRepositoryController.getRepositoryById
-);
+
 router.put(
   "/repositories/:id",
   authenticate,
   requireAdmin,
   githubRepositoryController.updateRepository
 );
+
+router.patch(
+  "/repositories/:id",
+  authenticate,
+  requireAdmin,
+  githubRepositoryController.updateRepository
+);
+
 router.delete(
   "/repositories/:id",
   authenticate,
@@ -43,7 +52,7 @@ router.delete(
   githubRepositoryController.deleteRepository
 );
 
-// リポジトリ検証API
+// リポジトリ検証
 router.post(
   "/validate-repository",
   authenticate,
@@ -51,20 +60,11 @@ router.post(
   githubRepositoryController.validateRepository
 );
 
-// オーナー別リポジトリ取得API
+// オーナー別リポジトリ取得
 router.get(
   "/owners/:owner/repositories",
   authenticate,
-  requireAdmin,
   githubRepositoryController.getRepositoriesByOwner
 );
-
-// 健全性チェックエンドポイント
-router.get("/health", (req, res) => {
-  res.status(200).json({
-    success: true,
-    message: "GitHub API連携システムは正常に動作しています",
-  });
-});
 
 export default router;
