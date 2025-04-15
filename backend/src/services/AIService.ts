@@ -46,6 +46,7 @@ interface GitHubPullRequestReviewContext {
   isDescriptionRequest?: boolean;
   isPrUpdate?: boolean;
   previousFeedbacks?: any[];
+  previousComments?: any[]; // 追加: 前回のコメント情報
   codeChangeSummary?: string;
 }
 export class AIService {
@@ -1203,7 +1204,7 @@ ${outputParser.getFormatInstructions()}
   }
 
   /**
-   * GitHub PRのコードをレビュー
+   * GitHub PRのコードをレビュー（前回のフィードバック活用版）
    */
   async reviewGitHubPullRequest(
     owner: string,
@@ -1212,10 +1213,10 @@ ${outputParser.getFormatInstructions()}
     context?: GitHubPullRequestReviewContext
   ): Promise<
     Array<{
-      feedback_type: "strength" | "improvement"; // 良い点か改善点かを区別
+      feedback_type: "strength" | "improvement";
       category: FeedbackCategory;
-      point: string; // 内容（良い点または問題点）
-      suggestion?: string; // 改善点の場合の提案
+      point: string;
+      suggestion?: string;
       code_snippet?: string;
       reference_url?: string;
       review_token?: string;
@@ -1231,7 +1232,6 @@ ${outputParser.getFormatInstructions()}
 
     try {
       // アクセストークンの取得
-      // GitHub RepositoryからアクセストークンをDBから取得
       const repositoryRepository =
         AppDataSource.getRepository(GitHubRepository);
       const repositoryConfig = await repositoryRepository.findOne({
@@ -1303,12 +1303,67 @@ ${outputParser.getFormatInstructions()}
 
       // 過去のレビュー履歴処理の改善
       let historyContext = "";
-      let checkedItemsContext = "";
-      let pendingItemsContext = "";
+      let previousFeedbacksContext = "";
 
-      // 前回のレビュー情報がある場合は処理（詳細実装は省略）
+      // 前回のフィードバック情報があれば構造化して表示
+      if (
+        context?.isReReview &&
+        context.previousFeedbacks &&
+        context.previousFeedbacks.length > 0
+      ) {
+        console.log(
+          `前回のフィードバック情報: ${context.previousFeedbacks.length}件`
+        );
 
-      // 強化したプロンプト
+        // 良い点と改善点に分類
+        const strengths = context.previousFeedbacks.filter(
+          (f) => f.feedback_type === "strength"
+        );
+        const improvements = context.previousFeedbacks.filter(
+          (f) => f.feedback_type === "improvement"
+        );
+
+        previousFeedbacksContext = `## 前回のレビュー内容の要約\n\n`;
+
+        // 良い点のサマリー
+        if (strengths.length > 0) {
+          previousFeedbacksContext += `### 前回評価された良い点 (${strengths.length}件)\n\n`;
+          strengths.forEach((item, idx) => {
+            previousFeedbacksContext += `${idx + 1}. **${
+              item.category
+            }**: ${item.point.substring(0, 100)}${
+              item.point.length > 100 ? "..." : ""
+            }\n`;
+          });
+          previousFeedbacksContext += `\n`;
+        }
+
+        // 改善点のサマリー
+        if (improvements.length > 0) {
+          previousFeedbacksContext += `### 前回指摘された改善点 (${improvements.length}件)\n\n`;
+          improvements.forEach((item, idx) => {
+            previousFeedbacksContext += `${idx + 1}. **${
+              item.category
+            }**: ${item.point.substring(0, 100)}${
+              item.point.length > 100 ? "..." : ""
+            }\n`;
+            if (item.suggestion) {
+              previousFeedbacksContext += `   - 提案: ${item.suggestion.substring(
+                0,
+                100
+              )}${item.suggestion.length > 100 ? "..." : ""}\n`;
+            }
+          });
+          previousFeedbacksContext += `\n`;
+        }
+
+        // 今回のレビュー指示
+        previousFeedbacksContext += `上記の前回フィードバックを参考に、以下の点に注目してレビューしてください：\n`;
+        previousFeedbacksContext += `1. 前回指摘された問題が解決されているか\n`;
+        previousFeedbacksContext += `2. 新たに発生した問題がないか\n`;
+        previousFeedbacksContext += `3. 全体的なコード品質の向上が見られるか\n\n`;
+      }
+
       // 強化したプロンプト - 教育目的重視
       const messages = [
         {
@@ -1319,7 +1374,7 @@ ${outputParser.getFormatInstructions()}
         {
           role: "user",
           content: `以下のGitHub Pull Requestをレビューし、新入社員の成長を促す前向きなフィードバックを生成してください。
-      
+    
 # Pull Request情報
 - PR番号: #${pullRequestId}
 - リポジトリ: ${owner}/${repo}
@@ -1344,6 +1399,8 @@ ${
 3. 改善された部分は具体的に褒めて、成長を強調してください
 4. まだ改善の余地がある点は、次のステップとして何をすべきか提案してください
 5. 最低限動作するコードになっているかを確認してください
+
+${previousFeedbacksContext}
 `
     : ""
 }

@@ -308,6 +308,57 @@ export class GitHubService {
   }
 
   /**
+   * PRの特定のコメントを取得
+   */
+  async getPullRequestComment(
+    owner: string,
+    repo: string,
+    commentId: number
+  ): Promise<any> {
+    if (!this.axiosInstance) {
+      throw new Error("GitHub APIが初期化されていません");
+    }
+
+    try {
+      console.log(`PR コメント #${commentId} (${owner}/${repo}) を取得します`);
+
+      // コメントの種類（issue_commentまたはreview_comment）を判断するのは難しいので、
+      // まずはissue_commentとして試し、失敗したらreview_commentとして試します
+      try {
+        const response = await this.axiosInstance.get(
+          `/repos/${owner}/${repo}/issues/comments/${commentId}`
+        );
+        console.log(`Issue コメント #${commentId} を取得しました`);
+        return {
+          ...response.data,
+          comment_type: "issue_comment",
+        };
+      } catch (issueCommentError) {
+        // issue_commentとして取得に失敗した場合、review_commentとして試みる
+        console.log(
+          `Issue コメントとして取得できないため、レビューコメントとして試みます`
+        );
+        const response = await this.axiosInstance.get(
+          `/repos/${owner}/${repo}/pulls/comments/${commentId}`
+        );
+        console.log(`レビュー コメント #${commentId} を取得しました`);
+        return {
+          ...response.data,
+          comment_type: "review_comment",
+        };
+      }
+    } catch (error: any) {
+      console.error(
+        `PRコメント取得エラー (${owner}/${repo} コメント#${commentId}):`,
+        error
+      );
+      throw new Error(
+        `PRのコメントを取得できませんでした: ${error.message || "不明なエラー"}`
+      );
+    }
+  }
+
+  /**
    * PRにコメントを追加
    */
   async addPullRequestComment(

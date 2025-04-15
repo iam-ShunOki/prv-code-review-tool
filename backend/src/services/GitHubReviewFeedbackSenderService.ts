@@ -43,6 +43,7 @@ export class GitHubReviewFeedbackSenderService {
     reviewContext?: {
       isReReview?: boolean;
       sourceCommentId?: number;
+      isDescriptionRequest?: boolean;
     }
   ): Promise<boolean> {
     console.log(
@@ -96,21 +97,27 @@ export class GitHubReviewFeedbackSenderService {
       );
 
       // GitHub PRにコメントを送信
+      let commentResponse;
       try {
-        await this.githubService.addPullRequestComment(
+        commentResponse = await this.githubService.addPullRequestComment(
           owner,
           repo,
           pullRequestId,
           markdownFeedback
         );
-        console.log(`PR #${pullRequestId} にレビューコメントを送信しました`);
+        console.log(
+          `PR #${pullRequestId} にレビューコメントを送信しました: コメントID=${commentResponse.id}`
+        );
       } catch (commentError) {
         console.error(`コメント送信エラー:`, commentError);
         return false;
       }
 
+      // 現在時刻
+      const now = new Date();
+
       // 処理履歴を更新
-      const tracker = await this.trackerRepository.findOne({
+      let tracker = await this.trackerRepository.findOne({
         where: {
           owner,
           repo,
@@ -118,54 +125,120 @@ export class GitHubReviewFeedbackSenderService {
         },
       });
 
-      if (tracker) {
-        // レビュー履歴を更新（教育目的要素を追加）
-        let reviewHistory = [];
-        try {
-          reviewHistory = JSON.parse(tracker.review_history || "[]");
-        } catch (e) {
-          console.warn("レビュー履歴のパースエラー:", e);
-        }
-
-        // 前回のレビューがあれば成長指標を計算
-        let growthIndicator = 0;
-        if (reviewHistory.length > 0 && reviewContext?.isReReview) {
-          const lastReview = reviewHistory[reviewHistory.length - 1];
-          // 改善提案数が減っていれば成長指標が上がる
-          if (lastReview.improvement_count > improvementCount) {
-            growthIndicator = Math.min(
-              100,
-              Math.round(
-                ((lastReview.improvement_count - improvementCount) /
-                  lastReview.improvement_count) *
-                  100
-              )
-            );
-          }
-        }
-
-        reviewHistory.push({
-          date: new Date().toISOString(),
-          review_token: reviewToken,
-          strength_count: strengthCount,
-          improvement_count: improvementCount,
-          is_re_review: reviewContext?.isReReview || false,
-          source_comment_id: reviewContext?.sourceCommentId,
-          growth_indicator: growthIndicator,
-          educational_focus: true,
-        });
-
-        tracker.review_history = JSON.stringify(reviewHistory);
-        tracker.last_review_at = new Date();
-        tracker.review_count = tracker.review_count + 1;
-
-        await this.trackerRepository.save(tracker);
+      // トラッカーが存在しない場合（初回レビューで処理済みマークがまだ設定されていない場合）
+      if (!tracker) {
         console.log(
-          `PR #${pullRequestId} のレビュー履歴を更新しました ${
-            growthIndicator > 0 ? `(成長指標: ${growthIndicator}%)` : ""
-          }`
+          `PR #${pullRequestId} のトラッカーが存在しません。新しく作成します。`
+        );
+
+        tracker = new GitHubPullRequestTracker();
+        tracker.repository_id = repository.id;
+        tracker.owner = owner;
+        tracker.repo = repo;
+        tracker.pull_request_id = pullRequestId;
+        tracker.processed_at = now;
+        tracker.last_review_at = now;
+        tracker.review_count = 1;
+
+        // 初回レビューなので、依頼コメントID/説明からの依頼状態は初期化だけ
+        tracker.processed_comment_ids = JSON.stringify(
+          reviewContext?.sourceCommentId ? [reviewContext.sourceCommentId] : []
+        );
+        tracker.description_processed =
+          reviewContext?.isDescriptionRequest || false;
+
+        // AIレビューコメントIDを初期化
+        tracker.ai_review_comment_ids = JSON.stringify(
+          commentResponse && commentResponse.id ? [commentResponse.id] : []
+        );
+
+        // レビュー履歴を初期化
+        tracker.review_history = JSON.stringify([
+          {
+            date: now.toISOString(),
+            review_token: reviewToken,
+            strength_count: strengthCount,
+            improvement_count: improvementCount,
+            is_re_review: false,
+            source_comment_id: reviewContext?.sourceCommentId,
+            educational_focus: true,
+            comment_id: commentResponse ? commentResponse.id : null,
+          },
+        ]);
+
+        // トラッカーを保存
+        await this.trackerRepository.save(tracker);
+        console.log(`PR #${pullRequestId} の新しいトラッカーを作成しました`);
+
+        return true; // 新規作成したので、以降の処理はスキップ
+      }
+
+      // 既存のトラッカーがある場合は更新
+      // AIのレビューコメントIDを更新
+      let aiReviewCommentIds = [];
+      try {
+        aiReviewCommentIds = JSON.parse(tracker.ai_review_comment_ids || "[]");
+      } catch (e) {
+        console.warn("AIレビューコメントIDのパースエラー:", e);
+      }
+
+      // 新しいコメントIDを追加（コメントのレスポンスが有効な場合）
+      if (commentResponse && commentResponse.id) {
+        aiReviewCommentIds.push(commentResponse.id);
+        tracker.ai_review_comment_ids = JSON.stringify(aiReviewCommentIds);
+        console.log(
+          `AIレビューコメントID ${commentResponse.id} を追加しました: 合計${aiReviewCommentIds.length}件`
         );
       }
+
+      // レビュー履歴を更新（教育目的要素を追加）
+      let reviewHistory = [];
+      try {
+        reviewHistory = JSON.parse(tracker.review_history || "[]");
+      } catch (e) {
+        console.warn("レビュー履歴のパースエラー:", e);
+      }
+
+      // 前回のレビューがあれば成長指標を計算
+      let growthIndicator = 0;
+      if (reviewHistory.length > 0 && reviewContext?.isReReview) {
+        const lastReview = reviewHistory[reviewHistory.length - 1];
+        // 改善提案数が減っていれば成長指標が上がる
+        if (lastReview.improvement_count > improvementCount) {
+          growthIndicator = Math.min(
+            100,
+            Math.round(
+              ((lastReview.improvement_count - improvementCount) /
+                lastReview.improvement_count) *
+                100
+            )
+          );
+        }
+      }
+
+      // 新しいレビュー履歴エントリにコメントIDを含める
+      reviewHistory.push({
+        date: now.toISOString(),
+        review_token: reviewToken,
+        strength_count: strengthCount,
+        improvement_count: improvementCount,
+        is_re_review: reviewContext?.isReReview || false,
+        source_comment_id: reviewContext?.sourceCommentId,
+        growth_indicator: growthIndicator,
+        educational_focus: true,
+        comment_id: commentResponse ? commentResponse.id : null, // コメントIDを履歴に追加
+      });
+
+      tracker.review_history = JSON.stringify(reviewHistory);
+      tracker.last_review_at = now;
+      tracker.review_count = tracker.review_count + 1;
+
+      await this.trackerRepository.save(tracker);
+      console.log(
+        `PR #${pullRequestId} のレビュー履歴を更新しました ${
+          growthIndicator > 0 ? `(成長指標: ${growthIndicator}%)` : ""
+        }`
+      );
 
       console.log(
         `GitHub PR #${pullRequestId} へのレビュー結果送信が完了しました`

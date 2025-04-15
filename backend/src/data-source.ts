@@ -47,6 +47,7 @@ import { AddProcessedCommentIds1625000001900 } from "./migrations/1625000001900-
 import { AddDescriptionProcessedToPullRequestTrackers1625000002000 } from "./migrations/1625000002000-AddDescriptionProcessedToPullRequestTrackers";
 import { CreateGitHubRepositoryTable1625000002100 } from "./migrations/1625000002100-CreateGitHubRepositoryTable";
 import { CreateGitHubPullRequestTracker1625000002200 } from "./migrations/1625000002200-CreateGitHubPullRequestTracker";
+import { AddAIReviewCommentIds1625000002300 } from "./migrations/1625000002300-AddAIReviewCommentIds";
 // 環境変数の読み込み
 dotenv.config();
 
@@ -107,6 +108,7 @@ export const AppDataSource = new DataSource({
     AddDescriptionProcessedToPullRequestTrackers1625000002000,
     CreateGitHubRepositoryTable1625000002100,
     CreateGitHubPullRequestTracker1625000002200,
+    AddAIReviewCommentIds1625000002300,
   ],
   subscribers: [],
 

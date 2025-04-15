@@ -41,6 +41,9 @@ export class GitHubPullRequestTracker {
   @Column({ type: "text", nullable: true, default: "[]" })
   processed_comment_ids: string;
 
+  @Column({ type: "text", nullable: true, default: "[]" })
+  ai_review_comment_ids: string; // 新規追加: AIが投稿したレビューコメントのID
+
   @Column({ default: false })
   description_processed: boolean;
 

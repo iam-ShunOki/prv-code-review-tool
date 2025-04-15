@@ -7,7 +7,8 @@ import { MentionDetectionService } from "./MentionDetectionService";
 import { AIService } from "./AIService";
 import { GitHubReviewFeedbackSenderService } from "./GitHubReviewFeedbackSenderService";
 import { In } from "typeorm";
-
+import { Feedback } from "../models/Feedback";
+import { ExtractedFeedback } from "../interfaces/ExtractedFeedback";
 /**
  * GitHub PRの監視と自動レビュー処理を行うサービス
  */
@@ -338,13 +339,104 @@ export class GitHubPullRequestMonitoringService {
       const isReReview =
         trackerRecord !== null && trackerRecord.review_count > 0;
       let previousFeedbacks = null;
+      let previousComments = [];
 
-      // 再レビューの場合は前回のレビュー情報を取得
-      if (isReReview) {
+      // 前回のレビュー情報を取得
+      if (isReReview && trackerRecord) {
         console.log(
           `PR #${prNumber} は再レビューです（${trackerRecord.review_count}回目）`
         );
-        // 前回のフィードバック情報を取得する処理を実装
+
+        // AIレビューコメントIDを取得
+        try {
+          const aiReviewCommentIds = JSON.parse(
+            trackerRecord.ai_review_comment_ids || "[]"
+          );
+
+          // 前回のAIレビューコメントがある場合、それらを取得して内容をログに出力
+          if (aiReviewCommentIds.length > 0) {
+            console.log(
+              `前回のAIレビューコメント一覧: ${aiReviewCommentIds.join(", ")}`
+            );
+
+            let allExtractedFeedbacks: ExtractedFeedback[] = [];
+
+            // 最新のコメントを取得（最後のコメントIDを使用）
+            const latestCommentId =
+              aiReviewCommentIds[aiReviewCommentIds.length - 1];
+
+            try {
+              console.log(
+                `最新のAIレビューコメント ID: ${latestCommentId} を取得します`
+              );
+              const latestComment =
+                await this.githubService.getPullRequestComment(
+                  owner,
+                  repo,
+                  latestCommentId
+                );
+
+              if (latestComment) {
+                previousComments.push(latestComment);
+                // ターミナルにコメント内容を出力
+                console.log(
+                  `\n------前回のAIレビューコメント ID: ${latestCommentId}------`
+                );
+                console.log(`コメント投稿者: ${latestComment.user.login}`);
+                console.log(`コメント作成日時: ${latestComment.created_at}`);
+                console.log(`コメント種別: ${latestComment.comment_type}`);
+                console.log(
+                  `コメント内容: \n${latestComment.body.substring(0, 500)}${
+                    latestComment.body.length > 500 ? "...(省略)" : ""
+                  }`
+                );
+                console.log(`----------------------------------\n`);
+
+                // コメントからフィードバック項目を抽出
+                const extractedFeedbacks = this.extractFeedbackFromComment(
+                  latestComment.body
+                );
+                if (extractedFeedbacks.length > 0) {
+                  allExtractedFeedbacks = [...extractedFeedbacks];
+                  console.log(
+                    `コメント #${latestCommentId} から ${extractedFeedbacks.length}件のフィードバック項目を抽出しました`
+                  );
+
+                  // 抽出したフィードバックの詳細を表示（デバッグ用）
+                  extractedFeedbacks.forEach((feedback, index) => {
+                    console.log(
+                      `  [${index + 1}] ${
+                        feedback.feedback_type === "strength"
+                          ? "良い点"
+                          : "改善点"
+                      }: ${feedback.category} - ${feedback.point.substring(
+                        0,
+                        100
+                      )}...`
+                    );
+                  });
+                }
+              }
+            } catch (commentError) {
+              console.error(
+                `コメント #${latestCommentId} の取得中にエラーが発生しました:`,
+                commentError
+              );
+            }
+
+            // 抽出したすべてのフィードバックをpreviousFeedbacksに設定
+            if (allExtractedFeedbacks.length > 0) {
+              previousFeedbacks = allExtractedFeedbacks;
+              console.log(
+                `合計 ${previousFeedbacks.length}件のフィードバック項目を抽出しました`
+              );
+            }
+          } else {
+            console.log(`前回のAIレビューコメントはありません`);
+          }
+        } catch (e) {
+          console.error("AIレビューコメントIDのパースエラー:", e);
+        }
       }
 
       // レビュートークンを生成
@@ -362,6 +454,7 @@ export class GitHubPullRequestMonitoringService {
           sourceCommentId: commentId,
           isDescriptionRequest: commentId === undefined,
           previousFeedbacks: previousFeedbacks || [],
+          previousComments: previousComments, // 前回のコメント情報を渡す
         }
       );
 
@@ -423,6 +516,218 @@ export class GitHubPullRequestMonitoringService {
       );
       return false;
     }
+  }
+
+  /**
+   * コメントからフィードバック項目を抽出して構造化する
+   * @param commentBody コメント本文
+   * @returns 構造化されたフィードバック項目の配列
+   */
+  private extractFeedbackFromComment(commentBody: string): ExtractedFeedback[] {
+    console.log("コメントからフィードバック項目を抽出します");
+    const extractedFeedbacks: ExtractedFeedback[] = [];
+
+    try {
+      // コメント内の特定のパターンを検索
+      // レビューID（reviewToken）を抽出
+      const reviewTokenMatch = commentBody.match(/レビューID: `([^`]+)`/);
+      const reviewToken = reviewTokenMatch ? reviewTokenMatch[1] : null;
+
+      // 「良い点」セクションを抽出
+      const strengthSectionMatch = commentBody.match(
+        /## ✅ 良い点\s*\n\n([\s\S]*?)(?=\n##|$)/
+      );
+      const strengthSection = strengthSectionMatch
+        ? strengthSectionMatch[1]
+        : "";
+
+      // 「改善提案」セクションを抽出
+      const improvementSectionMatch = commentBody.match(
+        /## 🔧 改善提案\s*\n\n([\s\S]*?)(?=\n##|$)/
+      );
+      const improvementSection = improvementSectionMatch
+        ? improvementSectionMatch[1]
+        : "";
+
+      console.log(`レビューID: ${reviewToken || "不明"}`);
+      console.log(
+        `良い点セクション: ${strengthSection ? "抽出成功" : "抽出失敗"}`
+      );
+      console.log(
+        `改善提案セクション: ${improvementSection ? "抽出成功" : "抽出失敗"}`
+      );
+
+      // 良い点セクションからカテゴリを抽出
+      const strengthCategories = this.extractCategories(strengthSection);
+
+      // 各カテゴリ内の良い点を抽出
+      for (const category of strengthCategories) {
+        const categoryItems = this.extractCategoryItems(
+          strengthSection,
+          category,
+          "strength"
+        );
+        extractedFeedbacks.push(...categoryItems);
+      }
+
+      // 改善提案セクションからカテゴリを抽出
+      const improvementCategories = this.extractCategories(improvementSection);
+
+      // 各カテゴリ内の改善提案を抽出
+      for (const category of improvementCategories) {
+        const categoryItems = this.extractCategoryItems(
+          improvementSection,
+          category,
+          "improvement"
+        );
+        extractedFeedbacks.push(...categoryItems);
+      }
+
+      console.log(
+        `抽出されたフィードバック項目: ${extractedFeedbacks.length}件`
+      );
+
+      return extractedFeedbacks;
+    } catch (error) {
+      console.error("フィードバック抽出エラー:", error);
+      return [];
+    }
+  }
+
+  /**
+   * マークダウンテキストからカテゴリを抽出
+   */
+  private extractCategories(text: string): string[] {
+    if (!text) return [];
+
+    const categoryRegex = /### (.*?)(?=\n\n|\n###|$)/g;
+    const categories = [];
+    let match;
+
+    while ((match = categoryRegex.exec(text)) !== null) {
+      categories.push(match[1].trim());
+    }
+
+    return categories;
+  }
+
+  /**
+   * カテゴリセクション内の個別フィードバック項目を抽出
+   */
+  private extractCategoryItems(
+    text: string,
+    category: string,
+    feedbackType: "strength" | "improvement"
+  ): ExtractedFeedback[] {
+    if (!text) return [];
+
+    const items: ExtractedFeedback[] = [];
+
+    // カテゴリセクションを抽出
+    const categoryRegex = new RegExp(
+      `### ${this.escapeRegExp(category)}\\s*\\n\\n([\\s\\S]*?)(?=\\n###|$)`,
+      "i"
+    );
+    const categoryMatch = text.match(categoryRegex);
+
+    if (!categoryMatch || !categoryMatch[1]) return [];
+
+    const categoryContent = categoryMatch[1];
+
+    if (feedbackType === "strength") {
+      // 良い点の抽出パターン
+      const itemRegex =
+        /\*\*([\d]+)\. (.*?)\*\*\s*\n\n([\s\S]*?)(?=\*\*[\d]+\.|---|\n\n$|$)/g;
+      let itemMatch;
+
+      while ((itemMatch = itemRegex.exec(categoryContent)) !== null) {
+        const pointText = itemMatch[2].trim();
+        const detailsText = itemMatch[3].trim();
+
+        // コードスニペットを抽出
+        const codeMatch = detailsText.match(/```\n([\s\S]*?)```/);
+        const codeSnippet = codeMatch ? codeMatch[1].trim() : undefined;
+
+        // 参考URLを抽出
+        const urlMatch = detailsText.match(
+          /📚 \*\*参考\*\*: \[(.*?)\]\((.*?)\)/
+        );
+        const referenceUrl = urlMatch ? urlMatch[2].trim() : undefined;
+
+        items.push({
+          feedback_type: "strength",
+          category: this.mapCategoryDisplayNameToKey(category),
+          point: pointText,
+          code_snippet: codeSnippet,
+          reference_url: referenceUrl,
+        });
+      }
+    } else {
+      // 改善提案の抽出パターン
+      const itemRegex =
+        /#### ([\d]+)\. (.*?)\s*\n\n([\s\S]*?)(?=####|\n\n$|$)/g;
+      let itemMatch;
+
+      while ((itemMatch = itemRegex.exec(categoryContent)) !== null) {
+        const pointText = itemMatch[2].trim();
+        const detailsText = itemMatch[3].trim();
+
+        // 改善提案を抽出
+        const suggestionMatch = detailsText.match(
+          /\*\*改善案\*\*: (.*?)(?=\n\n|$)/
+        );
+        const suggestion = suggestionMatch
+          ? suggestionMatch[1].trim()
+          : undefined;
+
+        // コードスニペットを抽出
+        const codeMatch = detailsText.match(/```\n([\s\S]*?)```/);
+        const codeSnippet = codeMatch ? codeMatch[1].trim() : undefined;
+
+        // 参考URLを抽出
+        const urlMatch = detailsText.match(
+          /📚 \*\*参考資料\*\*: \[(.*?)\]\((.*?)\)/
+        );
+        const referenceUrl = urlMatch ? urlMatch[2].trim() : undefined;
+
+        items.push({
+          feedback_type: "improvement",
+          category: this.mapCategoryDisplayNameToKey(category),
+          point: pointText,
+          suggestion: suggestion,
+          code_snippet: codeSnippet,
+          reference_url: referenceUrl,
+        });
+      }
+    }
+
+    return items;
+  }
+
+  /**
+   * 正規表現で使用する特殊文字をエスケープ
+   */
+  private escapeRegExp(string: string): string {
+    return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  /**
+   * カテゴリの表示名をAPIキーに変換
+   */
+  private mapCategoryDisplayNameToKey(displayName: string): string {
+    const displayToKey: { [key: string]: string } = {
+      "💻 コード品質": "code_quality",
+      "🔒 セキュリティ": "security",
+      "⚡ パフォーマンス": "performance",
+      "📘 ベストプラクティス": "best_practice",
+      "📖 可読性": "readability",
+      "✅ 機能性": "functionality",
+      "🔧 保守性": "maintainability",
+      "🏗️ アーキテクチャ": "architecture",
+      "📋 その他": "other",
+    };
+
+    return displayToKey[displayName] || "other";
   }
 
   /**
