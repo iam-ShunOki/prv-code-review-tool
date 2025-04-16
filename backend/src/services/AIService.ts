@@ -1666,4 +1666,18 @@ ${formatInstructions}`,
       }\n// Pull Requestのコードを手動で確認してください。`;
     }
   }
+
+  /**
+   * AIモデルを使用してメッセージを処理する
+   */
+  async processMessages(
+    messages: Array<{ role: string; content: string }>
+  ): Promise<any> {
+    try {
+      return await this.model.invoke(messages);
+    } catch (error) {
+      console.error("AIモデルの処理中にエラーが発生しました:", error);
+      throw error;
+    }
+  }
 }

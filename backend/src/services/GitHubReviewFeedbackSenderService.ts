@@ -72,29 +72,37 @@ export class GitHubReviewFeedbackSenderService {
         return false;
       }
 
-      // 改善点と良い点の数をカウント
-      const strengthCount = feedbacks.filter(
-        (f) => f.feedback_type === "strength"
-      ).length;
-      const improvementCount = feedbacks.filter(
-        (f) => f.feedback_type === "improvement"
-      ).length;
+      // 改善提案のみを抽出
+      const improvements = feedbacks
+        .filter((f) => f.feedback_type === "improvement")
+        .map((imp) => ({
+          category: imp.category,
+          point: imp.point,
+          suggestion: imp.suggestion,
+          code_snippet: imp.code_snippet,
+          reference_url: imp.reference_url,
+        }));
 
-      console.log(
-        `レビュー結果: 良い点=${strengthCount}件, 改善点=${improvementCount}件`
-      );
-
-      // フィードバックをマークダウン形式に変換（教育目的最適化版）
+      // フィードバックをマークダウン形式に変換
       const markdownFeedback = this.formatFeedbacksToMarkdown(
         feedbacks,
         reviewContext?.isReReview || false,
         reviewToken
       );
 
-      // 送信内容のプレビューをログ出力（デバッグ用）
-      console.log(
-        "マークダウン生成完了: 長さ=" + markdownFeedback.length + "文字"
-      );
+      // 埋め込みデータを追加（GitHubのUIでは見えない）
+      const embeddedData = {
+        review_token: reviewToken,
+        timestamp: Date.now(),
+        improvements: improvements,
+        is_re_review: reviewContext?.isReReview || false,
+      };
+
+      const markdownWithEmbeddedData =
+        markdownFeedback +
+        `\n\n<!-- REVIEW_DATA
+${JSON.stringify(embeddedData, null, 0)}
+-->`;
 
       // GitHub PRにコメントを送信
       let commentResponse;
@@ -103,7 +111,7 @@ export class GitHubReviewFeedbackSenderService {
           owner,
           repo,
           pullRequestId,
-          markdownFeedback
+          markdownWithEmbeddedData
         );
         console.log(
           `PR #${pullRequestId} にレビューコメントを送信しました: コメントID=${commentResponse.id}`
@@ -157,8 +165,8 @@ export class GitHubReviewFeedbackSenderService {
           {
             date: now.toISOString(),
             review_token: reviewToken,
-            strength_count: strengthCount,
-            improvement_count: improvementCount,
+            strength_count: 0,
+            improvement_count: 0,
             is_re_review: false,
             source_comment_id: reviewContext?.sourceCommentId,
             educational_focus: true,
@@ -204,11 +212,11 @@ export class GitHubReviewFeedbackSenderService {
       if (reviewHistory.length > 0 && reviewContext?.isReReview) {
         const lastReview = reviewHistory[reviewHistory.length - 1];
         // 改善提案数が減っていれば成長指標が上がる
-        if (lastReview.improvement_count > improvementCount) {
+        if (lastReview.improvement_count > improvements.length) {
           growthIndicator = Math.min(
             100,
             Math.round(
-              ((lastReview.improvement_count - improvementCount) /
+              ((lastReview.improvement_count - improvements.length) /
                 lastReview.improvement_count) *
                 100
             )
@@ -220,8 +228,8 @@ export class GitHubReviewFeedbackSenderService {
       reviewHistory.push({
         date: now.toISOString(),
         review_token: reviewToken,
-        strength_count: strengthCount,
-        improvement_count: improvementCount,
+        strength_count: 0,
+        improvement_count: improvements.length,
         is_re_review: reviewContext?.isReReview || false,
         source_comment_id: reviewContext?.sourceCommentId,
         growth_indicator: growthIndicator,

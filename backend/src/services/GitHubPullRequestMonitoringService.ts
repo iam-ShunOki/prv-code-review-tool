@@ -9,6 +9,7 @@ import { GitHubReviewFeedbackSenderService } from "./GitHubReviewFeedbackSenderS
 import { In } from "typeorm";
 import { Feedback } from "../models/Feedback";
 import { ExtractedFeedback } from "../interfaces/ExtractedFeedback";
+import { ImprovementEvaluationService } from "./ImprovementEvaluationService";
 /**
  * GitHub PRの監視と自動レビュー処理を行うサービス
  */
@@ -17,6 +18,7 @@ export class GitHubPullRequestMonitoringService {
   private mentionDetectionService: MentionDetectionService;
   private aiService: AIService;
   private feedbackSenderService: GitHubReviewFeedbackSenderService;
+  private evaluationService: ImprovementEvaluationService;
   private githubRepositoryRepository =
     AppDataSource.getRepository(GitHubRepository);
   private trackerRepository = AppDataSource.getRepository(
@@ -28,6 +30,7 @@ export class GitHubPullRequestMonitoringService {
     this.mentionDetectionService = new MentionDetectionService();
     this.aiService = new AIService();
     this.feedbackSenderService = new GitHubReviewFeedbackSenderService();
+    this.evaluationService = new ImprovementEvaluationService();
   }
 
   /**
@@ -1168,5 +1171,486 @@ export class GitHubPullRequestMonitoringService {
       processed,
       skipped,
     };
+  }
+
+  /**
+   * 前回の改善提案に対する進捗を評価
+   */
+  async evaluateImprovementProgress(
+    previousImprovements: any[],
+    currentFeedbacks: any[]
+  ): Promise<{
+    improved: number;
+    partially_improved: number;
+    not_improved: number;
+    evaluations: Array<{
+      improvement: any;
+      status: "improved" | "partially_improved" | "not_improved";
+      evidence?: string;
+    }>;
+  }> {
+    // 現在のフィードバックから強みと課題を抽出
+    const currentStrengths = currentFeedbacks
+      .filter((f) => f.feedback_type === "strength")
+      .map((f) => f.point);
+
+    const currentIssues = currentFeedbacks
+      .filter((f) => f.feedback_type === "improvement")
+      .map((f) => f.point);
+
+    // 評価を実行
+    const evaluations = this.evaluationService.evaluateImprovements(
+      previousImprovements,
+      currentStrengths,
+      currentIssues
+    );
+
+    // 結果を集計
+    const summary = evaluations.reduce(
+      (acc, curr) => {
+        acc[curr.status]++;
+        return acc;
+      },
+      { improved: 0, partially_improved: 0, not_improved: 0 }
+    );
+
+    return {
+      ...summary,
+      evaluations,
+    };
+  }
+
+  /**
+   * レビューコメントを生成（既存のメソッドを拡張）
+   */
+  private async generateReviewComment(
+    feedbacks: any[],
+    previousImprovements?: any[]
+  ): Promise<string> {
+    let comment = "";
+
+    // 前回の改善提案がある場合、進捗評価を追加
+    if (previousImprovements && previousImprovements.length > 0) {
+      const progress = await this.evaluateImprovementProgress(
+        previousImprovements,
+        feedbacks
+      );
+
+      comment += "\n## 🔄 前回の改善提案の進捗\n\n";
+
+      // 進捗の概要
+      const totalCount = previousImprovements.length;
+      const improvedPercent = Math.round(
+        (progress.improved / totalCount) * 100
+      );
+      const partiallyImprovedPercent = Math.round(
+        (progress.partially_improved / totalCount) * 100
+      );
+
+      comment += `${totalCount}件の改善提案のうち:\n`;
+      comment += `- ✅ ${progress.improved}件が完全に改善されました (${improvedPercent}%)\n`;
+      comment += `- 🔄 ${progress.partially_improved}件が部分的に改善されました (${partiallyImprovedPercent}%)\n`;
+      comment += `- ⏳ ${progress.not_improved}件がまだ改善待ちです\n\n`;
+
+      // 進捗バーの表示
+      const progressBar = this.generateProgressBar(
+        improvedPercent,
+        partiallyImprovedPercent
+      );
+      comment += `${progressBar}\n\n`;
+
+      // 詳細な評価結果
+      if (progress.improved > 0) {
+        comment += "### ✅ 改善された項目\n\n";
+        progress.evaluations
+          .filter((e) => e.status === "improved")
+          .forEach((evaluation, index) => {
+            comment += `${index + 1}. **${this.getCategoryDisplayName(
+              evaluation.improvement.category
+            )}**: `;
+            comment += `${evaluation.improvement.point}\n`;
+            comment += `   👏 ${evaluation.evidence}\n\n`;
+          });
+      }
+
+      if (progress.partially_improved > 0) {
+        comment += "### 🔄 部分的に改善された項目\n\n";
+        progress.evaluations
+          .filter((e) => e.status === "partially_improved")
+          .forEach((evaluation, index) => {
+            comment += `${index + 1}. **${this.getCategoryDisplayName(
+              evaluation.improvement.category
+            )}**: `;
+            comment += `${evaluation.improvement.point}\n`;
+            comment += `   👍 ${evaluation.evidence}\n\n`;
+          });
+      }
+
+      if (progress.not_improved > 0) {
+        comment += "### ⏳ まだ改善が必要な項目\n\n";
+        progress.evaluations
+          .filter((e) => e.status === "not_improved")
+          .forEach((evaluation, index) => {
+            comment += `${index + 1}. **${this.getCategoryDisplayName(
+              evaluation.improvement.category
+            )}**: `;
+            comment += `${evaluation.improvement.point}\n`;
+            if (
+              evaluation.evidence &&
+              !evaluation.evidence.includes("見つかりません")
+            ) {
+              comment += `   ℹ️ ${evaluation.evidence}\n`;
+            }
+            comment += `   💡 提案: ${evaluation.improvement.suggestion}\n\n`;
+          });
+      }
+
+      comment += "\n---\n\n";
+    }
+
+    // 既存のコメント生成ロジック
+    // ... existing code ...
+
+    return comment;
+  }
+
+  /**
+   * 進捗バーを生成
+   */
+  private generateProgressBar(
+    improvedPercent: number,
+    partiallyImprovedPercent: number
+  ): string {
+    const barLength = 20;
+    const improvedCount = Math.round((improvedPercent / 100) * barLength);
+    const partialCount = Math.round(
+      (partiallyImprovedPercent / 100) * barLength
+    );
+    const remainingCount = barLength - improvedCount - partialCount;
+
+    return (
+      "🟩".repeat(improvedCount) +
+      "🟨".repeat(partialCount) +
+      "⬜".repeat(remainingCount)
+    );
+  }
+
+  /**
+   * 前回のレビューから改善提案を抽出する
+   */
+  private async getPreviousImprovements(
+    owner: string,
+    repo: string,
+    prNumber: number
+  ): Promise<any[]> {
+    try {
+      // トラッカーから前回のレビュー情報を取得
+      const tracker = await this.trackerRepository.findOne({
+        where: { owner, repo, pull_request_id: prNumber },
+      });
+
+      if (!tracker || !tracker.ai_review_comment_ids) {
+        console.log(`PR #${prNumber} の前回レビュー情報が見つかりません`);
+        return [];
+      }
+
+      // 前回のレビューコメントIDを取得
+      let aiReviewCommentIds = [];
+      try {
+        aiReviewCommentIds = JSON.parse(tracker.ai_review_comment_ids);
+      } catch (e) {
+        console.error("AIレビューコメントIDのパース失敗:", e);
+        return [];
+      }
+
+      if (aiReviewCommentIds.length === 0) {
+        console.log(`PR #${prNumber} のレビューコメントIDが見つかりません`);
+        return [];
+      }
+
+      // 最新のレビューコメントIDを使用
+      const lastCommentId = aiReviewCommentIds[aiReviewCommentIds.length - 1];
+
+      // GitHubコメントを取得
+      const comment = await this.githubService.getPullRequestComment(
+        owner,
+        repo,
+        lastCommentId
+      );
+      if (!comment || !comment.body) {
+        console.log(`コメント #${lastCommentId} の内容が取得できません`);
+        return [];
+      }
+
+      // 方法1: 埋め込みデータからの抽出を試みる
+      const embeddedData = this.extractEmbeddedData(comment.body);
+      if (embeddedData?.improvements?.length > 0) {
+        console.log(
+          `埋め込みデータから${embeddedData.improvements.length}件の改善提案を抽出しました`
+        );
+        return embeddedData.improvements;
+      }
+
+      // 方法2: AIによる抽出をバックアップとして使用
+      console.log("埋め込みデータが見つからないか無効なため、AIで抽出します");
+      return await this.extractImprovementsWithAI(comment.body);
+    } catch (error) {
+      console.error(
+        `前回改善提案取得エラー (${owner}/${repo}#${prNumber}):`,
+        error
+      );
+      return [];
+    }
+  }
+
+  /**
+   * 埋め込みデータの抽出
+   */
+  private extractEmbeddedData(commentBody: string): any {
+    const match = commentBody.match(/<!-- REVIEW_DATA\n([\s\S]*?)\n-->/);
+    if (!match || !match[1]) return null;
+
+    try {
+      return JSON.parse(match[1]);
+    } catch (error) {
+      console.error("埋め込みデータ解析エラー:", error);
+      return null;
+    }
+  }
+
+  /**
+   * AIによるフォールバック抽出
+   */
+  private async extractImprovementsWithAI(commentBody: string): Promise<any[]> {
+    console.log("AIを使用して改善提案を抽出します");
+
+    try {
+      const messages = [
+        {
+          role: "system",
+          content: `あなたはGitHubのPRレビューコメントから改善提案を抽出する専門家です。
+以下の点に注意して正確なJSON形式でデータを抽出してください：
+1. 改善提案は「🔧 改善提案」セクションに含まれています
+2. 各提案はカテゴリ、問題点、改善案、コードスニペット（あれば）で構成されています
+3. カテゴリは以下のいずれかである必要があります：
+   - code_quality: コードの品質に関する提案
+   - security: セキュリティに関する提案
+   - performance: パフォーマンスに関する提案
+   - best_practice: ベストプラクティスに関する提案
+   - readability: 可読性に関する提案
+   - functionality: 機能性に関する提案
+   - maintainability: 保守性に関する提案
+   - architecture: アーキテクチャに関する提案
+   - other: その他の提案`,
+        },
+        {
+          role: "user",
+          content: `
+以下のPRレビューコメントから、改善提案の内容を抽出してください。
+特に「🔧 改善提案」セクションの内容に注目してください。
+
+${commentBody}
+
+各改善提案を以下のJSON形式で抽出してください：
+[
+  {
+    "category": "カテゴリ（上記の定義に従ってください）",
+    "point": "指摘された問題点（具体的に）",
+    "suggestion": "提案された改善策（具体的に）",
+    "code_snippet": "問題のあるコード（あれば）"
+  }
+]
+
+注意点：
+1. カテゴリは必ず上記の定義に従ってください
+2. 問題点と改善策は具体的に記述してください
+3. コードスニペットは問題のある部分のみを抽出してください
+4. JSONのみを出力し、余分な説明は不要です
+`,
+        },
+      ];
+
+      // AIに抽出を依頼
+      const response = await this.aiService.processMessages(messages);
+
+      // 応答からJSONデータを抽出
+      const content =
+        typeof response.content === "string"
+          ? response.content
+          : Array.isArray(response.content)
+          ? response.content
+              .map((item: { text?: string }) =>
+                typeof item === "object" && "text" in item ? item.text : ""
+              )
+              .join("")
+          : "";
+
+      // JSONを抽出する正規表現
+      const jsonMatch = content.match(/\[\s*\{.*\}\s*\]/s);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        console.log(`AIによる抽出: ${parsed.length}件の改善提案を抽出しました`);
+        return parsed;
+      }
+
+      console.log("AIからの応答からJSONを抽出できませんでした");
+      return [];
+    } catch (error) {
+      console.error("AI抽出エラー:", error);
+      return [];
+    }
+  }
+
+  /**
+   * AIによる抽出のテストケースを実行
+   */
+  async testAIExtraction(commentBody: string): Promise<{
+    success: boolean;
+    extractedCount: number;
+    extractionTime: number;
+    error?: string;
+    extractedImprovements?: any[];
+  }> {
+    const startTime = Date.now();
+    try {
+      const improvements = await this.extractImprovementsWithAI(commentBody);
+      const endTime = Date.now();
+
+      return {
+        success: true,
+        extractedCount: improvements.length,
+        extractionTime: endTime - startTime,
+        extractedImprovements: improvements,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        extractedCount: 0,
+        extractionTime: Date.now() - startTime,
+        error: error instanceof Error ? error.message : "不明なエラー",
+      };
+    }
+  }
+
+  /**
+   * テストケースを実行してAI抽出の精度を検証
+   */
+  async validateAIExtraction(): Promise<{
+    totalCases: number;
+    successCases: number;
+    averageTime: number;
+    categoryDistribution: { [key: string]: number };
+    details: Array<{
+      case: string;
+      success: boolean;
+      extractedCount: number;
+      extractionTime: number;
+      error?: string;
+    }>;
+  }> {
+    const testCases = [
+      {
+        name: "シンプルな改善提案",
+        content: `## 🔧 改善提案
+
+### コード品質
+1. **変数名の改善**
+   - **問題点**: 変数名が意味を表していない
+   - **改善案**: 変数名を具体的な意味を持つ名前に変更
+   - **コード**:
+     \`\`\`
+     let x = 10; // 改善前
+     let userCount = 10; // 改善後
+     \`\`\`
+`,
+      },
+      {
+        name: "複数の改善提案",
+        content: `## 🔧 改善提案
+
+### セキュリティ
+1. **パスワードのハッシュ化**
+   - **問題点**: パスワードが平文で保存されている
+   - **改善案**: bcryptを使用してパスワードをハッシュ化
+
+### パフォーマンス
+1. **データベースクエリの最適化**
+   - **問題点**: N+1問題が発生している
+   - **改善案**: クエリをJOINを使用して最適化
+`,
+      },
+      {
+        name: "コードスニペットを含む提案",
+        content: `## 🔧 改善提案
+
+### 可読性
+1. **コメントの追加**
+   - **問題点**: 複雑なロジックにコメントがない
+   - **改善案**: 処理の目的と流れを説明するコメントを追加
+   - **コード**:
+     \`\`\`
+     function processData(data) {
+       // データの前処理
+       const cleaned = data.filter(item => item.isValid);
+       
+       // データの変換処理
+       return cleaned.map(item => ({
+         id: item.id,
+         value: calculateValue(item)
+       }));
+     }
+     \`\`\`
+`,
+      },
+    ];
+
+    const results = await Promise.all(
+      testCases.map(async (testCase) => {
+        const result = await this.testAIExtraction(testCase.content);
+        return {
+          case: testCase.name,
+          ...result,
+        };
+      })
+    );
+
+    // カテゴリ分布を計算
+    const categoryDistribution: { [key: string]: number } = {};
+    results.forEach((result) => {
+      if (result.extractedImprovements) {
+        result.extractedImprovements.forEach((imp) => {
+          categoryDistribution[imp.category] =
+            (categoryDistribution[imp.category] || 0) + 1;
+        });
+      }
+    });
+
+    return {
+      totalCases: testCases.length,
+      successCases: results.filter((r) => r.success).length,
+      averageTime:
+        results.reduce((sum, r) => sum + r.extractionTime, 0) / results.length,
+      categoryDistribution,
+      details: results,
+    };
+  }
+
+  /**
+   * カテゴリの表示名を取得
+   */
+  private getCategoryDisplayName(category: string): string {
+    const categoryMap: { [key: string]: string } = {
+      code_quality: "コード品質",
+      security: "セキュリティ",
+      performance: "パフォーマンス",
+      best_practice: "ベストプラクティス",
+      readability: "可読性",
+      functionality: "機能性",
+      maintainability: "保守性",
+      architecture: "アーキテクチャ",
+      other: "その他",
+    };
+
+    return categoryMap[category] || category;
   }
 }

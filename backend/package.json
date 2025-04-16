@@ -19,7 +19,9 @@
     "fix-ngrok-config": "node scripts/fix-ngrok-config.js",
     "detect-ngrok": "node scripts/detect-ngrok.js",
     "dev:with-ngrok": "concurrently \"npm run dev\" \"npm run ngrok\"",
-    "setup-fonts": "node scripts/setup-font-dirs.js"
+    "setup-fonts": "node scripts/setup-font-dirs.js",
+    "test:ai-extraction": "ts-node src/tests/ai-extraction.test.ts",
+    "test:evaluation": "ts-node src/tests/improvement-evaluation.test.ts"
   },
   "dependencies": {
     "@langchain/community": "^0.3.0",
